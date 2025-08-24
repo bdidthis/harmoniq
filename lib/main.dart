@@ -1,8 +1,12 @@
 import 'dart:async';
-import 'dart:math';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
-void main() => runApp(const HarmoniQApp());
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const HarmoniQApp());
+}
 
 class HarmoniQApp extends StatelessWidget {
   const HarmoniQApp({super.key});
@@ -13,36 +17,221 @@ class HarmoniQApp extends StatelessWidget {
       title: 'harmoniQ',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF6C2CF1)),
+        // OPTION A: set darkness on the ColorScheme only
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF7F5BFF),
+          brightness: Brightness.dark,
+        ),
         useMaterial3: true,
+        fontFamily: 'SF Pro',
       ),
-      home: const HomeTabs(),
+      home: const SimpleHome(),
     );
   }
 }
 
-class HomeTabs extends StatelessWidget {
-  const HomeTabs({super.key});
+class SimpleHome extends StatefulWidget {
+  const SimpleHome({super.key});
+
+  @override
+  State<SimpleHome> createState() => _SimpleHomeState();
+}
+
+class _SimpleHomeState extends State<SimpleHome> {
+  // Analyze state
+  bool _isRecording = false;
+  double _confidence = 0.0;
+  String _keyResult = '--';
+  String _tempoResult = '--';
+
+  // Music Math state
+  final _bpmCtrl = TextEditingController(text: '120');
+  double _bpm = 120;
+  final List<DateTime> _taps = [];
+  Timer? _tapResetTimer;
+
+  @override
+  void dispose() {
+    _bpmCtrl.dispose();
+    _tapResetTimer?.cancel();
+    super.dispose();
+  }
+
+  // Analyze handlers (stubbed)
+  void _onPressStart() {
+    setState(() => _isRecording = true);
+  }
+
+  void _onPressEnd() {
+    setState(() {
+      _isRecording = false;
+      // demo outputs for now
+      _keyResult = 'C# minor';
+      _tempoResult = '128 BPM';
+      _confidence = 0.78;
+    });
+  }
+
+  // Tap tempo
+  void _onTapTempo() {
+    final now = DateTime.now();
+    _taps.add(now);
+
+    _tapResetTimer?.cancel();
+    _tapResetTimer = Timer(const Duration(seconds: 2), () {
+      _taps.clear();
+      if (mounted) setState(() {});
+    });
+
+    if (_taps.length >= 2) {
+      double totalMs = 0;
+      for (int i = 1; i < _taps.length; i++) {
+        totalMs += _taps[i].difference(_taps[i - 1]).inMilliseconds.toDouble();
+      }
+      final avgMs = totalMs / (_taps.length - 1);
+      if (avgMs > 0) {
+        final bpm = 60000.0 / avgMs;
+        if (bpm > 20 && bpm < 300) {
+          _bpm = bpm;
+          _bpmCtrl.text = _bpm.toStringAsFixed(1);
+          setState(() {});
+        }
+      }
+    } else {
+      setState(() {});
+    }
+  }
+
+  Map<String, double> get _durationsMs {
+    final msPerBeat = 60000.0 / _bpm;
+    return {
+      '1 bar, 4 beats': msPerBeat * 4,
+      'Whole note': msPerBeat * 4,
+      'Half note': msPerBeat * 2,
+      'Quarter note': msPerBeat,
+      'Eighth note': msPerBeat / 2,
+      'Sixteenth': msPerBeat / 4,
+      'Thirty‑second': msPerBeat / 8,
+      'Dotted quarter': msPerBeat * 1.5,
+      'Triplet quarter': msPerBeat * 2 / 3,
+      'Dotted eighth': msPerBeat * 0.75,
+      'Triplet eighth': msPerBeat / 3,
+      'Dotted sixteenth': msPerBeat * 0.375,
+      'Triplet sixteenth': msPerBeat / 6,
+    };
+  }
+
+  String _fmt(double v) => v.toStringAsFixed(2);
+
+  Future<void> _copyValue(String label, double ms) async {
+    final text = '$label: ${_fmt(ms)} ms at ${_bpm.toStringAsFixed(1)} BPM';
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Copied "$text"')),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 2,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('harmoniQ'),
-          centerTitle: true,
-          bottom: const TabBar(
-            tabs: [
-              Tab(text: 'Analyze'),
-              Tab(text: 'Paid'),
-            ],
-          ),
-        ),
-        body: const TabBarView(
+    final entries = _durationsMs.entries.toList();
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('harmoniQ'),
+        centerTitle: true,
+      ),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.all(16),
           children: [
-            AnalyzeScreen(),
-            PaidScreen(),
+            // ANALYZE
+            Text('Analyze', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 8),
+            ConfidenceMeter(confidence: _confidence),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                _ResultCard(title: 'Key', value: _keyResult),
+                _ResultCard(title: 'Tempo', value: _tempoResult),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Center(
+              child: PressHoldMicButton(
+                isRecording: _isRecording,
+                onPressStart: _onPressStart,
+                onPressEnd: _onPressEnd,
+              ),
+            ),
+            const SizedBox(height: 24),
+            const Divider(),
+            const SizedBox(height: 8),
+
+            // MUSIC MATH
+            Text('Music Math', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _bpmCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'BPM',
+                      border: OutlineInputBorder(),
+                    ),
+                    onChanged: (v) {
+                      final val = double.tryParse(v);
+                      if (val != null && val > 0 && val < 500) {
+                        setState(() => _bpm = val);
+                      }
+                    },
+                  ),
+                ),
+                const SizedBox(width: 12),
+                FilledButton(
+                  onPressed: _onTapTempo,
+                  child: const Text('Tap Tempo'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'BPM = ${_bpm.toStringAsFixed(1)}   |   1 beat = ${_fmt(60000.0 / _bpm)} ms',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+
+            ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: entries.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (_, i) {
+                final e = entries[i];
+                return ListTile(
+                  title: Text(e.key),
+                  subtitle: Text('${_fmt(e.value)} ms'),
+                  trailing: IconButton(
+                    tooltip: 'Copy',
+                    onPressed: () => _copyValue(e.key, e.value),
+                    icon: const Icon(Icons.copy),
+                  ),
+                );
+              },
+            ),
+
+            const SizedBox(height: 24),
+            const Divider(),
+            const SizedBox(height: 8),
+            // Frequency response placeholder (for later wiring)
+            Text('Frequency Response (Preview)',
+                style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 8),
+            const SizedBox(height: 180, child: SpectrumPlaceholder()),
+            const SizedBox(height: 16),
           ],
         ),
       ),
@@ -50,443 +239,184 @@ class HomeTabs extends StatelessWidget {
   }
 }
 
-class AnalyzeScreen extends StatefulWidget {
-  const AnalyzeScreen({super.key});
-  @override
-  State<AnalyzeScreen> createState() => _AnalyzeScreenState();
-}
+class PressHoldMicButton extends StatelessWidget {
+  final bool isRecording;
+  final VoidCallback onPressStart;
+  final VoidCallback onPressEnd;
 
-class _AnalyzeScreenState extends State<AnalyzeScreen> {
-  bool _pressing = false;
-  String _status = 'Ready';
-  String _keyResult = '-';
-  String _tempoResult = '-';
-  String _tuningOffset = '-';
-  double _confidenceLive = 0.0;
-  String _confidenceText = '-';
-  double _bpm = 120;
-
-  Timer? _ticker;
-  DateTime? _pressStart;
-  List<double> _spectrum = List<double>.filled(64, 0);
-
-  void _startHold() {
-    if (_pressing) return;
-    _pressing = true;
-    _pressStart = DateTime.now();
-    _confidenceLive = 0;
-    _status = 'Listening... hold to analyze';
-    _keyResult = '-';
-    _tempoResult = '-';
-    _tuningOffset = '-';
-    _confidenceText = '-';
-    _ticker?.cancel();
-    final rand = Random();
-    _ticker = Timer.periodic(const Duration(milliseconds: 100), (t) {
-      final sec = DateTime.now().difference(_pressStart!).inMilliseconds / 1000.0;
-      final target = (0.25 + sec / 3.0).clamp(0.0, 0.98);
-      setState(() {
-        _confidenceLive = target;
-        _spectrum = List.generate(_spectrum.length, (i) {
-          final base = 0.2 + 0.8 * sin((t.tick * 0.22) + i * 0.18).abs();
-          return (base + rand.nextDouble() * 0.25).clamp(0, 1);
-        });
-      });
-    });
-    setState(() {});
-  }
-
-  void _stopHold() {
-    if (!_pressing) return;
-    _pressing = false;
-    final sec = DateTime.now().difference(_pressStart!).inMilliseconds / 1000.0;
-    _ticker?.cancel();
-    final conf = (0.35 + sec / 4.0).clamp(0.35, 0.99);
-    setState(() {
-      _status = 'Analysis complete';
-      _keyResult = 'C Major';
-      _tempoResult = '120 BPM';
-      _tuningOffset = '+5 cents';
-      _confidenceLive = conf;
-      _confidenceText = conf.toStringAsFixed(2);
-    });
-  }
-
-  int _msFromBeats(double beats) {
-    final msPerBeat = 60000 / _bpm;
-    return (beats * msPerBeat).round();
-  }
-
-  Color _confidenceColor(BuildContext ctx) {
-    if (_confidenceLive >= 0.8) return Colors.green;
-    if (_confidenceLive >= 0.6) return Colors.orange;
-    return Colors.red;
-  }
-
-  @override
-  void dispose() {
-    _ticker?.cancel();
-    super.dispose();
-  }
+  const PressHoldMicButton({
+    super.key,
+    required this.isRecording,
+    required this.onPressStart,
+    required this.onPressEnd,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final rows = <_NoteRow>[
-      _NoteRow('Whole', 4.0),
-      _NoteRow('Half', 2.0),
-      _NoteRow('Quarter', 1.0),
-      _NoteRow('Eighth', 0.5),
-      _NoteRow('Sixteenth', 0.25),
-      _NoteRow('Dotted Half', 3.0),
-      _NoteRow('Dotted Quarter', 1.5),
-      _NoteRow('Dotted Eighth', 0.75),
-      _NoteRow('Quarter Triplet', 2.0 / 3.0),
-      _NoteRow('Eighth Triplet', 1.0 / 3.0),
-    ];
+    final Color base =
+    isRecording ? Colors.redAccent : Theme.of(context).colorScheme.primary;
+    final String label = isRecording ? 'Listening...' : 'Hold to Analyze';
 
-    final buttonColor = _pressing
-        ? theme.colorScheme.primary
-        : theme.colorScheme.secondaryContainer;
-
-    final buttonTextColor =
-    _pressing ? theme.colorScheme.onPrimary : theme.colorScheme.onSecondaryContainer;
-
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 820),
-          child: Column(
-            children: [
-              Card(
-                elevation: 1,
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    children: [
-                      Text('Press and hold to analyze', style: theme.textTheme.titleLarge),
-                      const SizedBox(height: 12),
-                      GestureDetector(
-                        onTapDown: (_) => _startHold(),
-                        onTapUp: (_) => _stopHold(),
-                        onTapCancel: () => _stopHold(),
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 140),
-                          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 20),
-                          decoration: BoxDecoration(
-                            color: buttonColor,
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                          child: Text(
-                            _pressing ? 'Release to stop' : 'Hold to Analyze',
-                            style: theme.textTheme.titleMedium?.copyWith(color: buttonTextColor),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      _SpectrumBar(values: _spectrum, active: _pressing),
-                      const SizedBox(height: 8),
-                      LinearProgressIndicator(
-                        value: _pressing ? null : _confidenceLive,
-                        minHeight: 6,
-                        color: _confidenceColor(context),
-                        backgroundColor: theme.colorScheme.surfaceVariant,
-                      ),
-                      const SizedBox(height: 8),
-                      Text(_status, textAlign: TextAlign.center),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              LayoutBuilder(
-                builder: (context, c) {
-                  final wide = c.maxWidth > 700;
-                  final results = Card(
-                    elevation: 1,
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Text('Results', style: theme.textTheme.titleLarge),
-                          const SizedBox(height: 12),
-                          _ResultRow(label: 'Key', value: _keyResult),
-                          _ResultRow(label: 'Tempo', value: _tempoResult),
-                          _ResultRow(label: 'Tuning Offset', value: _tuningOffset),
-                          Row(
-                            children: [
-                              const Expanded(child: Text('Confidence')),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: _confidenceColor(context).withOpacity(0.15),
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: _confidenceColor(context)),
-                                ),
-                                child: Text(
-                                  _confidenceText == '-' ? _confidenceLive.toStringAsFixed(2) : _confidenceText,
-                                  style: theme.textTheme.titleMedium?.copyWith(
-                                    color: _confidenceColor(context),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-
-                  final musicMath = Card(
-                    elevation: 1,
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Text('Music Math', style: theme.textTheme.titleLarge),
-                          const SizedBox(height: 12),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextFormField(
-                                  initialValue: _bpm.toStringAsFixed(0),
-                                  keyboardType: TextInputType.number,
-                                  decoration: const InputDecoration(
-                                    labelText: 'BPM',
-                                    border: OutlineInputBorder(),
-                                  ),
-                                  onChanged: (v) {
-                                    final parsed = double.tryParse(v);
-                                    if (parsed != null && parsed > 0 && parsed < 400) {
-                                      setState(() => _bpm = parsed);
-                                    }
-                                  },
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                flex: 2,
-                                child: Slider(
-                                  value: _bpm.clamp(20, 240),
-                                  min: 20,
-                                  max: 240,
-                                  divisions: 220,
-                                  label: '${_bpm.round()}',
-                                  onChanged: (v) => setState(() => _bpm = v),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          Container(
-                            decoration: BoxDecoration(
-                              border: Border.all(color: theme.colorScheme.outlineVariant),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Table(
-                              columnWidths: const {0: FlexColumnWidth(2), 1: FlexColumnWidth(1)},
-                              border: TableBorder(
-                                horizontalInside: BorderSide(color: theme.colorScheme.outlineVariant),
-                              ),
-                              children: [
-                                const TableRow(
-                                  children: [
-                                    Padding(padding: EdgeInsets.all(8), child: Text('Note')),
-                                    Padding(padding: EdgeInsets.all(8), child: Text('Milliseconds', textAlign: TextAlign.right)),
-                                  ],
-                                ),
-                                ...[
-                                  _NoteRow('Whole', 4.0),
-                                  _NoteRow('Half', 2.0),
-                                  _NoteRow('Quarter', 1.0),
-                                  _NoteRow('Eighth', 0.5),
-                                  _NoteRow('Sixteenth', 0.25),
-                                  _NoteRow('Dotted Half', 3.0),
-                                  _NoteRow('Dotted Quarter', 1.5),
-                                  _NoteRow('Dotted Eighth', 0.75),
-                                  _NoteRow('Quarter Triplet', 2.0 / 3.0),
-                                  _NoteRow('Eighth Triplet', 1.0 / 3.0),
-                                ].map((r) {
-                                  final ms = _msFromBeats(r.beats);
-                                  return TableRow(
-                                    children: [
-                                      Padding(padding: const EdgeInsets.all(8), child: Text(r.label)),
-                                      Padding(padding: const EdgeInsets.all(8), child: Text('$ms', textAlign: TextAlign.right)),
-                                    ],
-                                  );
-                                }),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-
-                  return wide
-                      ? Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(child: results),
-                      const SizedBox(width: 16),
-                      Expanded(child: musicMath),
-                    ],
-                  )
-                      : Column(
-                    children: [
-                      results,
-                      const SizedBox(height: 16),
-                      musicMath,
-                    ],
-                  );
-                },
-              ),
-            ],
-          ),
+    return GestureDetector(
+      onLongPressStart: (_) => onPressStart(),
+      onLongPressEnd: (_) => onPressEnd(),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        width: 180,
+        height: 180,
+        decoration: BoxDecoration(
+          color: base.withOpacity(0.12),
+          shape: BoxShape.circle,
+          border: Border.all(color: base, width: 3),
+          boxShadow: [
+            if (isRecording)
+              BoxShadow(
+                  color: base.withOpacity(0.5),
+                  blurRadius: 18,
+                  spreadRadius: 2),
+          ],
+        ),
+        alignment: Alignment.center,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(isRecording ? Icons.mic : Icons.mic_none, size: 56, color: base),
+            const SizedBox(height: 8),
+            Text(label),
+          ],
         ),
       ),
     );
   }
 }
 
-class PaidScreen extends StatelessWidget {
-  const PaidScreen({super.key});
+class ConfidenceMeter extends StatelessWidget {
+  final double confidence; // 0.0 to 1.0
+  const ConfidenceMeter({super.key, required this.confidence});
+
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 820),
-          child: Card(
-            elevation: 1,
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  Text('Frequency Response', style: theme.textTheme.titleLarge),
-                  const SizedBox(height: 12),
-                  const Text(
-                    'This panel is part of the paid plan. Here you will see a live 20 Hz to 20 kHz curve with harmonics and resonance markers.',
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 16),
-                  const _FrequencyPlaceholder(values: []),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Upgrade to unlock the full spectrum analyzer.',
-                    style: theme.textTheme.bodySmall,
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
-            ),
+    final pct = (confidence.clamp(0, 1) * 100).toStringAsFixed(0);
+    final Color bar = confidence >= 0.75
+        ? Colors.greenAccent
+        : confidence >= 0.5
+        ? Colors.amberAccent
+        : Colors.redAccent;
+
+    return Column(
+      children: [
+        Row(
+          children: [
+            const Text('Confidence'),
+            const SizedBox(width: 8),
+            Text('$pct%'),
+          ],
+        ),
+        const SizedBox(height: 8),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: LinearProgressIndicator(
+            value: confidence.clamp(0, 1),
+            minHeight: 10,
+            color: bar,
+            backgroundColor: Colors.white12,
           ),
         ),
-      ),
+      ],
     );
   }
 }
 
-class _ResultRow extends StatelessWidget {
-  final String label;
-  final String value;
-  const _ResultRow({required this.label, required this.value});
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        children: [
-          const Expanded(child: Text('')),
-          Expanded(child: Text(label)),
-          Text(value, style: Theme.of(context).textTheme.titleMedium),
-        ],
-      ),
-    );
-  }
-}
-
-class _SpectrumBar extends StatelessWidget {
-  final List<double> values;
-  final bool active;
-  const _SpectrumBar({required this.values, required this.active});
+class SpectrumPlaceholder extends StatelessWidget {
+  const SpectrumPlaceholder({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final v = values.isEmpty ? List<double>.filled(64, 0) : values;
-    return SizedBox(
-      height: 36,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: List.generate(v.length, (i) {
-          final h = (v[i] * 32) + 4;
-          return Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 1),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 120),
-                height: h,
-                decoration: BoxDecoration(
-                  color: active ? Theme.of(context).colorScheme.primary : Theme.of(context).colorScheme.primary.withOpacity(0.35),
-                  borderRadius: BorderRadius.circular(3),
-                ),
-              ),
-            ),
-          );
-        }),
-      ),
+    return CustomPaint(
+      painter: _SpectrumPainter(),
+      willChange: false,
+      child: const SizedBox.expand(),
     );
   }
 }
 
-class _FrequencyPlaceholder extends StatelessWidget {
-  final List<double> values;
-  const _FrequencyPlaceholder({required this.values});
-
-  @override
-  Widget build(BuildContext context) {
-    final v = values.isEmpty ? List<double>.generate(64, (i) => sin(i * 0.12).abs()) : values;
-    return SizedBox(
-      height: 140,
-      child: CustomPaint(painter: _FreqPainter(v)),
-    );
-  }
-}
-
-class _FreqPainter extends CustomPainter {
-  final List<double> values;
-  _FreqPainter(this.values);
+class _SpectrumPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..strokeWidth = 2
-      ..style = PaintingStyle.stroke
-      ..color = const Color(0xFF6C2CF1);
+    final bg = Paint()..color = const Color(0xFF121212);
+    canvas.drawRect(Offset.zero & size, bg);
+
+    final axis = Paint()
+      ..color = Colors.white24
+      ..strokeWidth = 1;
+
+    // axes
+    canvas.drawLine(Offset(0, size.height - 24), Offset(size.width, size.height - 24), axis);
+    canvas.drawLine(const Offset(40, 0), Offset(40, size.height), axis);
+
+    // labels
+    final labels = ['20', '50', '100', '200', '500', '1k', '2k', '5k', '10k', '20k'];
+    for (int i = 0; i < labels.length; i++) {
+      final x = 40 + i * (size.width - 60) / (labels.length - 1);
+      final tp = TextPainter(
+        text: const TextSpan(
+          text: '',
+          style: TextStyle(color: Colors.white54, fontSize: 10),
+        ),
+        textDirection: TextDirection.ltr,
+      );
+      final label = labels[i];
+      final tp2 = TextPainter(
+        text: TextSpan(text: label, style: const TextStyle(color: Colors.white54, fontSize: 10)),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp2.paint(canvas, Offset(x - tp2.width / 2, size.height - 22));
+    }
+
+    // fake spectrum
+    final line = Paint()
+      ..color = Colors.blueAccent
+      ..strokeWidth = 2;
+
     final path = Path();
-    final n = values.length;
-    for (int i = 0; i < n; i++) {
-      final x = size.width * (i / (n - 1));
-      final y = size.height * (1 - values[i] * 0.9);
+    for (int i = 0; i <= size.width.toInt(); i++) {
+      final t = i / size.width;
+      final y = size.height - 40
+          - 60 * (math.sin(t * math.pi * 3) * 0.5 + 0.5)
+          - 30 * math.exp(-6 * (t - 0.35) * (t - 0.35));
       if (i == 0) {
-        path.moveTo(x, y);
+        path.moveTo(i.toDouble(), y);
       } else {
-        path.lineTo(x, y);
+        path.lineTo(i.toDouble(), y);
       }
     }
-    canvas.drawPath(path, paint);
+    canvas.drawPath(path, line);
   }
 
   @override
-  bool shouldRepaint(covariant _FreqPainter oldDelegate) => oldDelegate.values != values;
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
-class _NoteRow {
-  final String label;
-  final double beats;
-  _NoteRow(this.label, this.beats);
+class _ResultCard extends StatelessWidget {
+  final String title;
+  final String value;
+  const _ResultCard({required this.title, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 2,
+      child: Container(
+        width: 160,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Column(
+          children: [
+            Text(title, style: Theme.of(context).textTheme.labelLarge),
+            const SizedBox(height: 8),
+            Text(value, style: Theme.of(context).textTheme.headlineSmall),
+          ],
+        ),
+      ),
+    );
+  }
 }
