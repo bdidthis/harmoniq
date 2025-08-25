@@ -11,12 +11,15 @@ dependencies:
     sdk: flutter
   cupertino_icons: ^1.0.8
   record: ^6.1.1
-
+  file_picker: ^8.0.0
+  path_provider: ^2.1.4
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^6.0.0
+  # This version is broadly compatible with Dart 3.x and stable Flutter channels.
+  # If you prefer your original ^6.0.0 and it works, you can keep it.
+  flutter_lints: ^4.0.0
 
 flutter:
   uses-material-design: true

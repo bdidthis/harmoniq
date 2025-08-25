@@ -1,0 +1,29 @@
+pluginManagement {
+    def flutterSdkPath = {
+        def p = new Properties()
+        file("local.properties").withInputStream { p.load(it) }
+        def s = p.getProperty("flutter.sdk")
+        if (s == null) {
+            throw new GradleException("Flutter SDK not found. Define flutter.sdk in local.properties")
+        }
+        return s
+    }()
+    includeBuild("$flutterSdkPath/packages/flutter_tools/gradle")
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+plugins {
+    id "dev.flutter.flutter-plugin-loader" version "1.0.0"
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = "harmoniq_clean_run"
+include ":app"
