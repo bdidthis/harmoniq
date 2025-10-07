@@ -1,0 +1,4 @@
+bpm: [lib/bpm_estimator.dart]
+key: [lib/key_detector.dart]
+offline: [lib/offline_file_analyzer_page.dart]
+ui: [lib/analyzer_page.dart]
