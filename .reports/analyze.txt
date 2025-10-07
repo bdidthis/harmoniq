@@ -1,0 +1,48 @@
+Analyzing ....
+
+  error - lib/offline_analyzer_page.dart:95:20 - A value of type 'num' can't be assigned to a variable of type 'double'. Try changing the type of the variable, or casting the right-hand type to 'double'. - invalid_assignment
+  error - lib/share_intake.dart:9:33 - Instance member 'getMediaStream' can't be accessed using static access. - static_access_to_instance_member
+  error - lib/share_intake.dart:11:66 - There's no constant named 'FILE' in 'SharedMediaType'. Try correcting the name to the name of an existing constant, or defining a constant named 'FILE'. - undefined_enum_constant
+  error - lib/share_intake.dart:17:26 - Instance member 'getInitialMedia' can't be accessed using static access. - static_access_to_instance_member
+  error - lib/share_intake.dart:19:66 - There's no constant named 'FILE' in 'SharedMediaType'. Try correcting the name to the name of an existing constant, or defining a constant named 'FILE'. - undefined_enum_constant
+warning - lib/bpm_estimator.dart:516:9 - The value of the local variable 'lockRun' isn't used. Try removing the variable or using it. - unused_local_variable
+warning - lib/key_detector.dart:209:22 - The value of the field '_labels' isn't used. Try removing the field, or using it. - unused_field
+warning - lib/key_detector.dart:290:35 - Unnecessary type check; the result is always 'true'. Try correcting the type check, or removing the type check. - unnecessary_type_check
+warning - lib/key_detector.dart:302:32 - Unnecessary type check; the result is always 'true'. Try correcting the type check, or removing the type check. - unnecessary_type_check
+warning - lib/key_detector.dart:362:16 - The value of the field '_vizSpectrum' isn't used. Try removing the field, or using it. - unused_field
+warning - lib/key_detector.dart:363:11 - The value of the field '_peakHz' isn't used. Try removing the field, or using it. - unused_field
+warning - lib/key_detector.dart:379:7 - The value of the field '_agreeRun' isn't used. Try removing the field, or using it. - unused_field
+warning - lib/key_model.dart:78:30 - Unnecessary type check; the result is always 'true'. Try correcting the type check, or removing the type check. - unnecessary_type_check
+warning - lib/mic_match_page.dart:42:7 - The value of the field '_framesCount' isn't used. Try removing the field, or using it. - unused_field
+warning - lib/offline_analyzer_page.dart:3:8 - Unused import: 'dart:math'. Try removing the import directive. - unused_import
+warning - lib/offline_analyzer_page.dart:4:8 - Unused import: 'dart:typed_data'. Try removing the import directive. - unused_import
+warning - lib/offline_analyzer_page.dart:13:8 - Unused import: 'genre_config.dart'. Try removing the import directive. - unused_import
+warning - lib/offline_analyzer_page.dart:24:11 - The value of the field '_wavPath' isn't used. Try removing the field, or using it. - unused_field
+warning - lib/offline_file_analyzer_page.dart:6:8 - Unused import: 'dart:math'. Try removing the import directive. - unused_import
+warning - lib/share_intake.dart:14:13 - The operand can't be 'null', so the condition is always 'false'. Try removing the condition, an enclosing condition, or the whole conditional statement. - unnecessary_null_comparison
+warning - lib/share_intake.dart:22:13 - The operand can't be 'null', so the condition is always 'false'. Try removing the condition, an enclosing condition, or the whole conditional statement. - unnecessary_null_comparison
+   info - lib/analyzer_page.dart:10:8 - The import of 'dart:typed_data' is unnecessary because all of the used elements are also provided by the import of 'package:flutter/foundation.dart'. Try removing the import directive. - unnecessary_import
+   info - lib/bpm_test_page.dart:151:9 - Statements in an if should be enclosed in a block. Try wrapping the statement in a block. - curly_braces_in_flow_control_structures
+   info - lib/bpm_test_page.dart:158:11 - Statements in an if should be enclosed in a block. Try wrapping the statement in a block. - curly_braces_in_flow_control_structures
+   info - lib/genre_config.dart:68:3 - The constant name 'middle_eastern' isn't a lowerCamelCase identifier. Try changing the name to follow the lowerCamelCase style. - constant_identifier_names
+   info - lib/genre_config.dart:311:7 - Don't invoke 'print' in production code. Try using a logging framework. - avoid_print
+   info - lib/genre_config.dart:348:7 - Don't invoke 'print' in production code. Try using a logging framework. - avoid_print
+   info - lib/key_detector.dart:239:7 - Don't invoke 'print' in production code. Try using a logging framework. - avoid_print
+   info - lib/key_detector.dart:242:7 - Don't invoke 'print' in production code. Try using a logging framework. - avoid_print
+   info - lib/key_detector.dart:308:7 - Don't invoke 'print' in production code. Try using a logging framework. - avoid_print
+   info - lib/key_detector.dart:1014:7 - Statements in an if should be enclosed in a block. Try wrapping the statement in a block. - curly_braces_in_flow_control_structures
+   info - lib/key_model.dart:57:7 - Don't invoke 'print' in production code. Try using a logging framework. - avoid_print
+   info - lib/key_model.dart:97:7 - Don't invoke 'print' in production code. Try using a logging framework. - avoid_print
+   info - lib/logger.dart:260:7 - Don't invoke 'print' in production code. Try using a logging framework. - avoid_print
+   info - lib/logger.dart:262:7 - Don't invoke 'print' in production code. Try using a logging framework. - avoid_print
+   info - lib/logger.dart:319:5 - Don't invoke 'print' in production code. Try using a logging framework. - avoid_print
+   info - lib/logger.dart:329:7 - Don't invoke 'print' in production code. Try using a logging framework. - avoid_print
+   info - lib/logger.dart:356:7 - Don't invoke 'print' in production code. Try using a logging framework. - avoid_print
+   info - lib/logger.dart:358:7 - Don't invoke 'print' in production code. Try using a logging framework. - avoid_print
+   info - lib/logger.dart:372:9 - Statements in an if should be enclosed in a block. Try wrapping the statement in a block. - curly_braces_in_flow_control_structures
+   info - lib/logger.dart:385:7 - Don't invoke 'print' in production code. Try using a logging framework. - avoid_print
+   info - lib/share_intake.dart:15:20 - Don't use 'BuildContext's across async gaps. Try rewriting the code to not use the 'BuildContext', or guard the use with a 'mounted' check. - use_build_context_synchronously
+   info - lib/share_intake.dart:23:20 - Don't use 'BuildContext's across async gaps. Try rewriting the code to not use the 'BuildContext', or guard the use with a 'mounted' check. - use_build_context_synchronously
+   info - test/bpm_estimator_test.dart:4:8 - Can't use a relative path to import a library in 'lib'. Try fixing the relative path or changing the import to a 'package:' import. - avoid_relative_lib_imports
+
+44 issues found.
