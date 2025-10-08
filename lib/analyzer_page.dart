@@ -143,8 +143,8 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
         AudioSessionConfiguration(
           avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
           avAudioSessionCategoryOptions:
-          AVAudioSessionCategoryOptions.defaultToSpeaker |
-          AVAudioSessionCategoryOptions.allowBluetooth,
+              AVAudioSessionCategoryOptions.defaultToSpeaker |
+                  AVAudioSessionCategoryOptions.allowBluetooth,
           avAudioSessionMode: AVAudioSessionMode.measurement,
           androidAudioAttributes: const AndroidAudioAttributes(
             contentType: AndroidAudioContentType.speech,
@@ -159,7 +159,8 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     }
   }
 
-  double? get _hintBpm => _useHint ? double.tryParse(_hintCtrl.text.trim()) : null;
+  double? get _hintBpm =>
+      _useHint ? double.tryParse(_hintCtrl.text.trim()) : null;
 
   void _buildAnalyzers({required int sampleRate}) {
     _key = KeyDetector(
@@ -175,7 +176,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     final rec = HintCalibrator(
       hintBpm: hintBpm,
       bandTightness:
-      hintBpm == null ? HintBandTightness.loose : HintBandTightness.medium,
+          hintBpm == null ? HintBandTightness.loose : HintBandTightness.medium,
       defaultMinBpm: _settings.minBpm,
       defaultMaxBpm: _settings.maxBpm,
     ).recommend();
@@ -194,7 +195,8 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
       hypothesisDecay: 0.96, // ↓ Slightly faster decay (was 0.97)
       switchThreshold: 1.50, // ↑ MUCH harder to switch (was 1.40)
       switchHoldFrames: 9, // ↑ Longer hold (was 7)
-      lockStability: 0.85, // ↑ CRITICAL: Require very high stability before lock (was 0.78)
+      lockStability:
+          0.85, // ↑ CRITICAL: Require very high stability before lock (was 0.78)
       unlockStability: 0.60, // ↓ Easier to unlock wrong lock (was 0.65)
       reportDeadbandUnlocked: 0.03, // ↓ Tighter (was 0.04)
       reportDeadbandLocked: 0.12, // ↓ CRITICAL FIX: was 0.20 (±20% drift!)
@@ -205,8 +207,9 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
       fallbackMaxBpm: _settings.maxBpm,
     );
 
-    final recToUse =
-    _useTight ? HintCalibrator(hintBpm: hintBpm).finalizeTightening(rec) : rec;
+    final recToUse = _useTight
+        ? HintCalibrator(hintBpm: hintBpm).finalizeTightening(rec)
+        : rec;
 
     _bpm = CalibratedEstimator.fromRecommendation(rec: recToUse, args: args);
   }
@@ -245,7 +248,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content:
-          const Text('Microphone access needed. Open Settings to enable.'),
+              const Text('Microphone access needed. Open Settings to enable.'),
           action: SnackBarAction(label: 'Settings', onPressed: openAppSettings),
           duration: const Duration(seconds: 5),
         ),
@@ -318,7 +321,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
 
     _audioSub?.cancel();
     _audioSub = audioStream.listen(
-          (bytes) {
+      (bytes) {
         try {
           if (bytes.isEmpty) return;
           Uint8List b = ((bytes.length & 1) == 1)
@@ -385,7 +388,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
       smoothingType: _key.currentConfig.smoothingType.name,
       smoothingStrength: _key.currentConfig.smoothingStrength,
       processingLatency:
-      _frameCount > 0 ? testDuration.inMilliseconds / _frameCount : 0.0,
+          _frameCount > 0 ? testDuration.inMilliseconds / _frameCount : 0.0,
       droppedFrames: _droppedFrames,
       whiteningAlpha: _key.currentConfig.whiteningAlpha,
       bassSuppression: _key.currentConfig.bassSuppression,
@@ -439,7 +442,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     _key.addBytes(alignedBytes, channels: _channels, isFloat32: false);
 
     final int16 =
-    alignedBytes.buffer.asInt16List(0, alignedBytes.lengthInBytes ~/ 2);
+        alignedBytes.buffer.asInt16List(0, alignedBytes.lengthInBytes ~/ 2);
 
     double sumSq = 0.0;
     double maxAbs = 0.0;
@@ -548,7 +551,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     // Pull ACF peaks for scoring
     final List<Map<String, dynamic>> tops =
         (_bpm.debugStats['last_acf_top'] as List?)
-            ?.cast<Map<String, dynamic>>() ??
+                ?.cast<Map<String, dynamic>>() ??
             const [];
 
     double acfStrengthFor(double targetBpm) {
@@ -667,7 +670,8 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
           } else if (ratio >= 0.60 && ratio <= 0.95) {
             // In this zone, check specific problem ratios
             if ((ratio >= 0.64 && ratio <= 0.72) || // 2/3 triplet
-                (ratio >= 0.76 && ratio <= 0.82)) { // 4/5 quintuplet
+                (ratio >= 0.76 && ratio <= 0.82)) {
+              // 4/5 quintuplet
               isSuspect = true;
             }
           }
@@ -692,8 +696,8 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
       0.5, 0.67, 0.75, 1.0, 1.33, 1.5, 2.0,
       0.6, 0.8, 1.25, 1.6, 1.8,
       // NEW: Add triplet and quintuplet ratios explicitly
-      2.0/3.0, 3.0/2.0, // Triplet ratios (for Calvin Harris)
-      4.0/5.0, 5.0/4.0, // Quintuplet ratios (for Daft Punk)
+      2.0 / 3.0, 3.0 / 2.0, // Triplet ratios (for Calvin Harris)
+      4.0 / 5.0, 5.0 / 4.0, // Quintuplet ratios (for Daft Punk)
     ];
 
     final candidates = <double>{
@@ -731,7 +735,8 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
           s += hystWeight * 0.8;
         }
       } else if (prev != null && stab >= 0.60) {
-        s += (math.log((bpm / prev).abs() + 1e-9) / math.ln2).abs() * 1.0; // Increased from 0.6
+        s += (math.log((bpm / prev).abs() + 1e-9) / math.ln2).abs() *
+            1.0; // Increased from 0.6
       }
 
       // (4) Hint attraction
@@ -972,8 +977,8 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
   Widget build(BuildContext context) {
     final keyLabel = _key.label;
     final keyConf = _key.confidence.clamp(0, 1.0).asDouble;
-    final bpmStr =
-        _displayBpm?.toStringAsFixed(1) ?? (_bpm.bpm?.toStringAsFixed(1) ?? '--');
+    final bpmStr = _displayBpm?.toStringAsFixed(1) ??
+        (_bpm.bpm?.toStringAsFixed(1) ?? '--');
     final isLocked = _bpm.isLocked;
     final tuningOffset = _key.tuningOffset;
 
@@ -982,8 +987,8 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     final displayedKey = showKeyNow ? keyLabel : '--';
     final keySubtitle = showKeyNow
         ? (tuningOffset != null
-        ? '${tuningOffset > 0 ? '+' : ''}${tuningOffset.toStringAsFixed(1)}¢'
-        : null)
+            ? '${tuningOffset > 0 ? '+' : ''}${tuningOffset.toStringAsFixed(1)}¢'
+            : null)
         : 'analyzing...';
 
     return GestureDetector(
@@ -1053,7 +1058,6 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                     ),
                   ),
                 ),
-
               _SectionCard(
                 title: 'Genre Configuration',
                 child: Column(
@@ -1069,9 +1073,9 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                             ),
                             items: Genre.values
                                 .map((g) => DropdownMenuItem(
-                              value: g,
-                              child: Text(g.name),
-                            ))
+                                      value: g,
+                                      child: Text(g.name),
+                                    ))
                                 .toList(),
                             onChanged: _onGenreChanged,
                           ),
@@ -1086,9 +1090,9 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                             ),
                             items: _getSubgenresForGenre(_selectedGenre)
                                 .map((s) => DropdownMenuItem(
-                              value: s,
-                              child: Text(s.name.replaceAll('_', ' ')),
-                            ))
+                                      value: s,
+                                      child: Text(s.name.replaceAll('_', ' ')),
+                                    ))
                                 .toList(),
                             onChanged: _onSubgenreChanged,
                           ),
@@ -1104,7 +1108,6 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                 ),
               ),
               const SizedBox(height: 12),
-
               Row(
                 children: [
                   Expanded(
@@ -1125,7 +1128,6 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                 ],
               ),
               const SizedBox(height: 6),
-
               _ConfidenceMeter(
                 label: 'Key Confidence',
                 confidence: keyConf,
@@ -1142,10 +1144,9 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                 label: 'BPM Confidence',
                 confidence: _bpm.confidence,
                 secondary:
-                'Stability: ${(_bpm.stability * 100).toStringAsFixed(0)}%',
+                    'Stability: ${(_bpm.stability * 100).toStringAsFixed(0)}%',
               ),
               const SizedBox(height: 12),
-
               Center(
                 child: Column(
                   children: [
@@ -1162,7 +1163,8 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                       children: [
                         FilledButton.icon(
                           onPressed: _toggleRecording,
-                          icon: Icon(_recording ? Icons.stop : Icons.play_arrow),
+                          icon:
+                              Icon(_recording ? Icons.stop : Icons.play_arrow),
                           label: Text(_recording ? 'Stop' : 'Start'),
                         ),
                         OutlinedButton.icon(
@@ -1176,7 +1178,6 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                 ),
               ),
               const SizedBox(height: 16),
-
               _SectionCard(
                 title: 'Live Mic Levels',
                 child: Column(
@@ -1201,7 +1202,6 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                 ),
               ),
               const SizedBox(height: 16),
-
               _SectionCard(
                 title: 'Calibrate (Optional)',
                 child: Column(
@@ -1227,8 +1227,8 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                             child: TextField(
                               controller: _hintCtrl,
                               keyboardType:
-                              const TextInputType.numberWithOptions(
-                                  decimal: true),
+                                  const TextInputType.numberWithOptions(
+                                      decimal: true),
                               decoration: const InputDecoration(
                                 labelText: 'Hint BPM',
                                 border: OutlineInputBorder(),
@@ -1272,7 +1272,6 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                 ),
               ),
               const SizedBox(height: 16),
-
               _SectionCard(
                 title: 'Tempo Tools',
                 child: Column(
@@ -1284,8 +1283,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                           child: TextField(
                             controller: _bpmCtrl,
                             focusNode: _bpmFocus,
-                            keyboardType:
-                            const TextInputType.numberWithOptions(
+                            keyboardType: const TextInputType.numberWithOptions(
                                 decimal: true),
                             textInputAction: TextInputAction.done,
                             onEditingComplete: _applyBpmFromField,
@@ -1322,26 +1320,26 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                         OutlinedButton(
                           onPressed: (_displayBpm ?? 0) > 0
                               ? () => setState(() {
-                            _displayBpm = (_displayBpm! / 2)
-                                .clamp(1.0, 500.0)
-                                .asDouble;
-                            _bpmCtrl.text =
-                                _displayBpm!.toStringAsFixed(1);
-                            _liveBpm.value = _displayBpm;
-                          })
+                                    _displayBpm = (_displayBpm! / 2)
+                                        .clamp(1.0, 500.0)
+                                        .asDouble;
+                                    _bpmCtrl.text =
+                                        _displayBpm!.toStringAsFixed(1);
+                                    _liveBpm.value = _displayBpm;
+                                  })
                               : null,
                           child: const Text('½x'),
                         ),
                         OutlinedButton(
                           onPressed: (_displayBpm ?? 0) > 0
                               ? () => setState(() {
-                            _displayBpm = (_displayBpm! * 2)
-                                .clamp(1.0, 500.0)
-                                .asDouble;
-                            _bpmCtrl.text =
-                                _displayBpm!.toStringAsFixed(1);
-                            _liveBpm.value = _displayBpm;
-                          })
+                                    _displayBpm = (_displayBpm! * 2)
+                                        .clamp(1.0, 500.0)
+                                        .asDouble;
+                                    _bpmCtrl.text =
+                                        _displayBpm!.toStringAsFixed(1);
+                                    _liveBpm.value = _displayBpm;
+                                  })
                               : null,
                           child: const Text('2x'),
                         ),
@@ -1351,7 +1349,6 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                 ),
               ),
               const SizedBox(height: 16),
-
               _SectionCard(
                 title: 'Music Math',
                 child: _displayBpm != null && _displayBpm! > 0
@@ -1491,8 +1488,8 @@ class _ResultCard extends StatelessWidget {
                 Text(
                   title,
                   style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
                 ),
                 if (isLocked) ...[
                   const SizedBox(width: 8),
@@ -1510,8 +1507,8 @@ class _ResultCard extends StatelessWidget {
               child: Text(
                 value,
                 style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
+                      fontWeight: FontWeight.bold,
+                    ),
               ),
             ),
             if (subtitle != null) ...[
@@ -1519,11 +1516,11 @@ class _ResultCard extends StatelessWidget {
               Text(
                 subtitle!,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context)
-                      .colorScheme
-                      .onSurface
-                      .withValues(alpha: 0.7),
-                ),
+                      color: Theme.of(context)
+                          .colorScheme
+                          .onSurface
+                          .withValues(alpha: 0.7),
+                    ),
               ),
             ],
           ],
@@ -1547,7 +1544,7 @@ class _PressHoldMicButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final Color base =
-    isRecording ? Colors.redAccent : Theme.of(context).colorScheme.primary;
+        isRecording ? Colors.redAccent : Theme.of(context).colorScheme.primary;
     final String label = isRecording ? 'Listening…' : 'Hold to Analyze';
 
     return GestureDetector(
@@ -1574,7 +1571,8 @@ class _PressHoldMicButton extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(isRecording ? Icons.mic : Icons.mic_none, size: 56, color: base),
+            Icon(isRecording ? Icons.mic : Icons.mic_none,
+                size: 56, color: base),
             const SizedBox(height: 8),
             Text(
               label,
@@ -1604,8 +1602,8 @@ class _ConfidenceMeter extends StatelessWidget {
     final Color bar = confidence >= 0.75
         ? Colors.greenAccent
         : confidence >= 0.5
-        ? Colors.amberAccent
-        : Colors.redAccent;
+            ? Colors.amberAccent
+            : Colors.redAccent;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1705,35 +1703,36 @@ class _MusicMathThreeColumn extends StatelessWidget {
     final rows = MusicMathRows.buildThreeColumn(bpm);
 
     Widget cell(String title, MMCell c) => Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-        decoration: BoxDecoration(
-          border: Border(
-              left: BorderSide(color: Theme.of(context).dividerColor)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(title, style: Theme.of(context).textTheme.labelMedium),
-            const SizedBox(height: 4),
-            Text('${c.ms.toStringAsFixed(2)} ms',
-                style: Theme.of(context)
-                    .textTheme
-                    .bodyMedium
-                    ?.copyWith(fontWeight: FontWeight.w600)),
-            Text('(${c.hz.toStringAsFixed(4)} Hz)',
-                style: Theme.of(context).textTheme.bodySmall),
-          ],
-        ),
-      ),
-    );
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+            decoration: BoxDecoration(
+              border: Border(
+                  left: BorderSide(color: Theme.of(context).dividerColor)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: Theme.of(context).textTheme.labelMedium),
+                const SizedBox(height: 4),
+                Text('${c.ms.toStringAsFixed(2)} ms',
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodyMedium
+                        ?.copyWith(fontWeight: FontWeight.w600)),
+                Text('(${c.hz.toStringAsFixed(4)} Hz)',
+                    style: Theme.of(context).textTheme.bodySmall),
+              ],
+            ),
+          ),
+        );
 
     return Column(
       children: [
         Container(
           padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
+            color:
+                Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
             borderRadius: BorderRadius.circular(6),
           ),
           child: Row(
@@ -1748,14 +1747,14 @@ class _MusicMathThreeColumn extends StatelessWidget {
                 ),
               ),
               Expanded(
-                  child:
-                  Text('Notes', style: Theme.of(context).textTheme.labelLarge)),
+                  child: Text('Notes',
+                      style: Theme.of(context).textTheme.labelLarge)),
               Expanded(
                   child: Text('Triplets',
                       style: Theme.of(context).textTheme.labelLarge)),
               Expanded(
-                  child:
-                  Text('Dotted', style: Theme.of(context).textTheme.labelLarge)),
+                  child: Text('Dotted',
+                      style: Theme.of(context).textTheme.labelLarge)),
             ],
           ),
         ),
@@ -1766,7 +1765,7 @@ class _MusicMathThreeColumn extends StatelessWidget {
               border: Border(
                 bottom: BorderSide(
                     color:
-                    Theme.of(context).dividerColor.withValues(alpha: 0.6)),
+                        Theme.of(context).dividerColor.withValues(alpha: 0.6)),
               ),
             ),
             child: Row(
@@ -1774,7 +1773,7 @@ class _MusicMathThreeColumn extends StatelessWidget {
                 Expanded(
                   child: Padding(
                     padding:
-                    const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                        const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
                     child: Text(r.label),
                   ),
                 ),
