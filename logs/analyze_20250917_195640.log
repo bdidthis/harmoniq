@@ -1,0 +1,85 @@
+Analyzing harmoniq_clean_run...                                 
+
+   info • The import of 'dart:typed_data' is unnecessary because all of the used elements are also provided by the import of 'package:flutter/foundation.dart' • lib/analyzer_page.dart:6:8 • unnecessary_import
+   info • Statements in a while should be enclosed in a block • lib/analyzer_page.dart:443:41 • curly_braces_in_flow_control_structures
+   info • Statements in a while should be enclosed in a block • lib/analyzer_page.dart:444:41 • curly_braces_in_flow_control_structures
+   info • Statements in a while should be enclosed in a block • lib/analyzer_page.dart:469:43 • curly_braces_in_flow_control_structures
+   info • Statements in a while should be enclosed in a block • lib/analyzer_page.dart:470:43 • curly_braces_in_flow_control_structures
+   info • Statements in a while should be enclosed in a block • lib/analyzer_page.dart:501:41 • curly_braces_in_flow_control_structures
+   info • Statements in a while should be enclosed in a block • lib/analyzer_page.dart:502:41 • curly_braces_in_flow_control_structures
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/analyzer_page.dart:621:37 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/analyzer_page.dart:1079:66 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/analyzer_page.dart:1114:23 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/analyzer_page.dart:1120:29 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/analyzer_page.dart:1279:58 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/analyzer_page.dart:1300:74 • deprecated_member_use
+   info • Unnecessary use of 'toList' in a spread • lib/analyzer_page.dart:1317:12 • unnecessary_to_list_in_spreads
+   info • The private field _prevMag could be 'final' • lib/bpm_estimator.dart:85:16 • prefer_final_fields
+warning • The value of the local variable 'lockRun' isn't used • lib/bpm_estimator.dart:445:9 • unused_local_variable
+   info • Use 'const' for final variables initialized to a constant value • lib/bpm_estimator.dart:616:5 • prefer_const_declarations
+   info • Statements in a while should be enclosed in a block • lib/bpm_test_page.dart:752:25 • curly_braces_in_flow_control_structures
+   info • Statements in a while should be enclosed in a block • lib/bpm_test_page.dart:753:25 • curly_braces_in_flow_control_structures
+   info • Statements in a while should be enclosed in a block • lib/bpm_test_page.dart:792:27 • curly_braces_in_flow_control_structures
+   info • Statements in a while should be enclosed in a block • lib/bpm_test_page.dart:793:27 • curly_braces_in_flow_control_structures
+   info • Statements in a for should be enclosed in a block • lib/cqt_chroma.dart:112:24 • curly_braces_in_flow_control_structures
+   info • Statements in a for should be enclosed in a block • lib/cqt_chroma.dart:114:36 • curly_braces_in_flow_control_structures
+   info • The constant name 'middle_eastern' isn't a lowerCamelCase identifier • lib/genre_config.dart:68:3 • constant_identifier_names
+   info • Don't invoke 'print' in production code • lib/genre_config.dart:314:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/genre_config.dart:347:7 • avoid_print
+   info • Function literals shouldn't be passed to 'forEach' • lib/genre_config.dart:437:21 • avoid_function_literals_in_foreach_calls
+   info • Function literals shouldn't be passed to 'forEach' • lib/genre_config.dart:438:23 • avoid_function_literals_in_foreach_calls
+warning • Unused import: 'key_model.dart' • lib/key_detector.dart:10:8 • unused_import
+warning • The value of the field '_labels' isn't used • lib/key_detector.dart:209:22 • unused_field
+   info • Don't invoke 'print' in production code • lib/key_detector.dart:226:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/key_detector.dart:229:7 • avoid_print
+warning • Unnecessary type check; the result is always 'true' • lib/key_detector.dart:276:9 • unnecessary_type_check
+warning • Unnecessary type check; the result is always 'true' • lib/key_detector.dart:286:9 • unnecessary_type_check
+   info • Don't invoke 'print' in production code • lib/key_detector.dart:291:7 • avoid_print
+   info • Statements in a for should be enclosed in a block • lib/key_detector.dart:313:40 • curly_braces_in_flow_control_structures
+   info • Function literals shouldn't be passed to 'forEach' • lib/key_detector.dart:318:20 • avoid_function_literals_in_foreach_calls
+warning • The value of the field '_vizSpectrum' isn't used • lib/key_detector.dart:341:16 • unused_field
+warning • The value of the field '_peakHz' isn't used • lib/key_detector.dart:342:11 • unused_field
+warning • The value of the field '_agreeRun' isn't used • lib/key_detector.dart:358:7 • unused_field
+   info • Statements in a for should be enclosed in a block • lib/key_detector.dart:631:28 • curly_braces_in_flow_control_structures
+   info • Statements in a for should be enclosed in a block • lib/key_detector.dart:673:36 • curly_braces_in_flow_control_structures
+   info • Statements in a for should be enclosed in a block • lib/key_detector.dart:774:33 • curly_braces_in_flow_control_structures
+   info • Statements in a for should be enclosed in a block • lib/key_detector.dart:796:36 • curly_braces_in_flow_control_structures
+   info • Use 'const' for final variables initialized to a constant value • lib/key_detector.dart:848:5 • prefer_const_declarations
+   info • Statements in a for should be enclosed in a block • lib/key_detector.dart:907:29 • curly_braces_in_flow_control_structures
+   info • Statements in a for should be enclosed in a block • lib/key_detector.dart:908:47 • curly_braces_in_flow_control_structures
+   info • Don't invoke 'print' in production code • lib/key_model.dart:41:7 • avoid_print
+warning • Unnecessary type check; the result is always 'true' • lib/key_model.dart:61:58 • unnecessary_type_check
+   info • Don't invoke 'print' in production code • lib/key_model.dart:79:7 • avoid_print
+   info • Unnecessary braces in a string interpolation • lib/logger.dart:253:34 • unnecessary_brace_in_string_interps
+   info • Don't invoke 'print' in production code • lib/logger.dart:259:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/logger.dart:261:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/logger.dart:308:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/logger.dart:318:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/logger.dart:348:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/logger.dart:350:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/logger.dart:376:7 • avoid_print
+   info • Unnecessary 'const' keyword • lib/metrics_bus.dart:40:17 • unnecessary_const
+   info • Use 'const' for final variables initialized to a constant value • lib/metronome.dart:49:5 • prefer_const_declarations
+   info • Use 'const' for final variables initialized to a constant value • lib/metronome.dart:50:5 • prefer_const_declarations
+   info • Use 'const' for final variables initialized to a constant value • lib/metronome.dart:51:5 • prefer_const_declarations
+   info • Use 'const' for final variables initialized to a constant value • lib/metronome.dart:54:5 • prefer_const_declarations
+warning • The value of the field '_framesCount' isn't used • lib/mic_match_page.dart:42:7 • unused_field
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/mic_match_page.dart:234:33 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/mic_match_page.dart:305:74 • deprecated_member_use
+   info • Statements in a for should be enclosed in a block • lib/mic_match_page.dart:491:24 • curly_braces_in_flow_control_structures
+   info • Statements in a for should be enclosed in a block • lib/mic_match_page.dart:494:40 • curly_braces_in_flow_control_structures
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/paid_tools_page.dart:396:58 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/paid_tools_page.dart:418:74 • deprecated_member_use
+   info • Unnecessary use of 'toList' in a spread • lib/paid_tools_page.dart:435:12 • unnecessary_to_list_in_spreads
+   info • Statements in a for should be enclosed in a block • lib/pitch_tracker.dart:72:24 • curly_braces_in_flow_control_structures
+   info • Statements in a for should be enclosed in a block • lib/pitch_tracker.dart:74:33 • curly_braces_in_flow_control_structures
+   info • Statements in a for should be enclosed in a block • lib/pitch_tracker.dart:76:24 • curly_braces_in_flow_control_structures
+   info • Statements in a for should be enclosed in a block • lib/pitch_tracker.dart:96:43 • curly_braces_in_flow_control_structures
+   info • Statements in a for should be enclosed in a block • lib/pitch_tracker.dart:97:39 • curly_braces_in_flow_control_structures
+   info • Statements in a for should be enclosed in a block • lib/pitch_tracker.dart:98:43 • curly_braces_in_flow_control_structures
+   info • Use 'const' for final variables initialized to a constant value • lib/synthetic_suite.dart:155:5 • prefer_const_declarations
+   info • Use 'const' for final variables initialized to a constant value • lib/synthetic_suite.dart:156:5 • prefer_const_declarations
+   info • Use 'const' for final variables initialized to a constant value • lib/synthetic_suite.dart:192:5 • prefer_const_declarations
+   info • Use 'const' for final variables initialized to a constant value • lib/synthetic_suite.dart:193:5 • prefer_const_declarations
+   info • Use 'const' for final variables initialized to a constant value • lib/synthetic_suite.dart:195:5 • prefer_const_declarations
+
