@@ -1,5 +1,12 @@
 // lib/bpm_estimator.dart
-// HarmoniQ BPM Estimator — v6.2 “Anti-Halftime + Stability”
+// HarmoniQ BPM Estimator — v6.3 "Enhanced Anti-Halftime + Full Parameter Support"
+//
+// FIXES:
+// - Constructor now accepts ALL parameters (no more ignored args)
+// - Expanded anti-halftime range: 55-95 BPM (was 70-95)
+// - More aggressive thresholds for half-tempo correction
+// - Runs anti-halftime BEFORE hypothesis selection
+// - Added musical tempo priors throughout
 
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -43,26 +50,26 @@ class BpmEstimator {
   double get confidence => _last.confidence;
 
   Map<String, dynamic> get debugStats => <String, dynamic>{
-        'env_len': _onsetCurve.length,
-        'energy_db': _energyDb,
-        'written_frames': _envelopesWritten,
-        'window_frames': _framesPerWindow,
-        'last_frame_rms': _lastFrameRms,
-        'format_guess': _formatGuess,
-        'hypotheses': {
-          'h1_bpm': _h1Bpm,
-          'h1_score': _h1Score,
-          'h2_bpm': _h2Bpm,
-          'h2_score': _h2Score,
-          'h3_bpm': _h3Bpm,
-          'h3_score': _h3Score,
-        },
-        'last_acf_top': _lastAcfTop,
-        'octave_history': _octaveHistory,
-        'recent_candidates': _recentCandidates.length,
-        'sticky_target': _stickyTarget,
-        'active_clamp_target': _activeClampTarget,
-      };
+    'env_len': _onsetCurve.length,
+    'energy_db': _energyDb,
+    'written_frames': _envelopesWritten,
+    'window_frames': _framesPerWindow,
+    'last_frame_rms': _lastFrameRms,
+    'format_guess': _formatGuess,
+    'hypotheses': {
+      'h1_bpm': _h1Bpm,
+      'h1_score': _h1Score,
+      'h2_bpm': _h2Bpm,
+      'h2_score': _h2Score,
+      'h3_bpm': _h3Bpm,
+      'h3_score': _h3Score,
+    },
+    'last_acf_top': _lastAcfTop,
+    'octave_history': _octaveHistory,
+    'recent_candidates': _recentCandidates.length,
+    'sticky_target': _stickyTarget,
+    'active_clamp_target': _activeClampTarget,
+  };
 
   final int sampleRate;
   final int frameSize;
@@ -88,6 +95,8 @@ class BpmEstimator {
   final double lockStabilityLo;
   final double beatsToLock;
   final double beatsToUnlock;
+  final double reportDeadbandUnlocked;
+  final double reportDeadbandLocked;
   final double reportQuantUnlocked;
   final double reportQuantLocked;
 
@@ -147,6 +156,7 @@ class BpmEstimator {
   final _KalmanFilter _kalman = _KalmanFilter();
   double? _activeClampTarget;
 
+  // ENHANCED CONSTRUCTOR - Now accepts ALL parameters
   BpmEstimator({
     required this.sampleRate,
     this.frameSize = 1024,
@@ -163,12 +173,12 @@ class BpmEstimator {
     this.hypothesisDecay = 0.97,
     this.switchThreshold = 1.35,
     this.switchHoldFrames = 4,
-
-    // Slightly slower to lock for stability
     this.lockStabilityHi = 0.82,
     this.lockStabilityLo = 0.58,
-    this.beatsToLock = 4.5, // was 4.0
+    this.beatsToLock = 4.5,
     this.beatsToUnlock = 2.5,
+    this.reportDeadbandUnlocked = 0.04,
+    this.reportDeadbandLocked = 0.12,
     this.reportQuantUnlocked = 0.05,
     this.reportQuantLocked = 0.05,
     this.minEnergyDb = -65.0,
@@ -179,19 +189,17 @@ class BpmEstimator {
     this.stickyHoldFracUnlocked = 0.05,
     this.stickyConfidenceThreshold = 0.75,
     this.stickyMinFrames = 12,
-
-    // Metronome clamp OFF by default for general music (see .forMetronome())
     this.metronomeClampEnabled = false,
     this.metronomeTargets = const [83.1, 92.3, 103.5, 120.0],
     this.metronomeClampRadius = 1.5,
     this.metronomeCandidateRadius = 2.0,
     this.metronomeMinScore = 0.90,
   })  : _hann = List<double>.generate(
-          frameSize,
-          (int n) => frameSize <= 1
-              ? 1.0
-              : (0.5 - 0.5 * math.cos(2 * math.pi * n / (frameSize - 1))),
-        ),
+    frameSize,
+        (int n) => frameSize <= 1
+        ? 1.0
+        : (0.5 - 0.5 * math.cos(2 * math.pi * n / (frameSize - 1))),
+  ),
         _prevMag = List<double>.filled(frameSize ~/ 2 + 1, 0.0),
         _smoothMag = List<double>.filled(frameSize ~/ 2 + 1, 1e-3) {
     if (sampleRate <= 0) throw ArgumentError('sampleRate must be positive');
@@ -296,7 +304,7 @@ class BpmEstimator {
     if (processedSamples > 0) {
       _lastFrameRms = math.sqrt(frameEnergy / processedSamples);
       _energyDb =
-          _lastFrameRms > 0 ? 20 * math.log(_lastFrameRms) / math.ln10 : -120.0;
+      _lastFrameRms > 0 ? 20 * math.log(_lastFrameRms) / math.ln10 : -120.0;
     }
   }
 
@@ -324,7 +332,7 @@ class BpmEstimator {
       const double alpha = 0.95;
       for (int k = 1; k <= half; k++) {
         final double mag =
-            math.sqrt(f.real[k] * f.real[k] + f.imag[k] * f.imag[k]);
+        math.sqrt(f.real[k] * f.real[k] + f.imag[k] * f.imag[k]);
         if (enableWhitening) {
           _smoothMag[k] = alpha * _smoothMag[k] + (1 - alpha) * mag;
           final double whiten = (mag / (_smoothMag[k] + 1e-9)) - 1.0;
@@ -380,7 +388,7 @@ class BpmEstimator {
     return w;
   }
 
-  // --- helper: max ACF support near a BPM (reads _lastAcfTop) ---
+  // Helper: max ACF support near a BPM (reads _lastAcfTop)
   double _acfSupportNear(double bpm, {double radius = 1.25}) {
     if (bpm <= 0 || _lastAcfTop.isEmpty) return 0.0;
     double best = 0.0;
@@ -399,9 +407,9 @@ class BpmEstimator {
     if (n < 48) return;
 
     final int minLag =
-        math.max(2, (60.0 * sampleRate / (frameSize * maxBpm)).round());
+    math.max(2, (60.0 * sampleRate / (frameSize * maxBpm)).round());
     final int maxLag =
-        math.min(n - 3, (60.0 * sampleRate / (frameSize * minBpm)).round());
+    math.min(n - 3, (60.0 * sampleRate / (frameSize * minBpm)).round());
     if (minLag >= maxLag) return;
 
     final Map<int, double> acf = <int, double>{};
@@ -436,7 +444,7 @@ class BpmEstimator {
     for (int i = 0; i < keep; i++) {
       final int lag = sorted[i].key;
       final double refined =
-          _parabolicRefinePeak(enhanced, lag, minLag, maxLag);
+      _parabolicRefinePeak(enhanced, lag, minLag, maxLag);
       final double bpm = 60.0 / (refined * frameSize / sampleRate);
       final double totalScore = sorted[i].value;
       _lastAcfTop.add({'lag': refined, 'bpm': bpm, 'score': totalScore});
@@ -447,6 +455,39 @@ class BpmEstimator {
     _recentCandidates
         .add(candidates.sublist(0, math.min(8, candidates.length)));
     if (_recentCandidates.length > 5) _recentCandidates.removeAt(0);
+
+    // ===== ENHANCED ANTI-HALFTIME - RUNS BEFORE HYPOTHESIS SELECTION =====
+    // This is CRITICAL: fix candidates BEFORE they become hypotheses
+    for (int i = 0; i < candidates.length; i++) {
+      final double cand = candidates[i];
+
+      // EXPANDED RANGE: 55-95 BPM (catches Calvin Harris at 64, Nirvana at 65)
+      if (cand >= 55.0 && cand <= 95.0) {
+        final double dbl = (cand * 2.0).clamp(minBpm, maxBpm);
+
+        if (dbl >= 100.0 && dbl <= maxBpm) {
+          final double selfAcf = _acfSupportNear(cand);
+          final double dblAcf = _acfSupportNear(dbl);
+          final bool dblInCands = candidates.any((c) => (c - dbl).abs() <= 2.0);
+
+          // MUCH MORE AGGRESSIVE THRESHOLDS
+          double threshold = 0.45; // Default: promote if double is 45% as strong
+
+          // Even more aggressive in specific cases
+          if (dblInCands) threshold = 0.35; // Double tempo in top candidates
+          if (candScores[i] < 0.50) threshold = 0.30; // Low confidence on half-tempo
+          if (cand >= 60.0 && cand <= 67.0) threshold = 0.25; // Classic half-tempo zone
+
+          // Promote to double if evidence supports it
+          if (dblAcf >= selfAcf * threshold) {
+            candidates[i] = dbl;
+            // Also boost the score since we're correcting an error
+            candScores[i] = candScores[i] * 1.15;
+          }
+        }
+      }
+    }
+    // ===== END ANTI-HALFTIME =====
 
     _h1Score *= hypothesisDecay;
     _h2Score *= hypothesisDecay;
@@ -516,29 +557,17 @@ class BpmEstimator {
         ? _h1Bpm
         : (candidates.isNotEmpty ? candidates.first : 0.0);
 
-    // ---------- Anti-halftime (70–95 → consider ×2 when evidence is close) ----------
-    if (selected >= 70.0 && selected <= 95.0) {
-      final double dbl = (selected * 2.0).clamp(minBpm, maxBpm);
-      final double selfAcf = _acfSupportNear(selected);
-      final double dblAcf = _acfSupportNear(dbl);
-      final bool dblInCands = candidates.any((c) => (c - dbl).abs() <= 1.5);
-      // promote to double if ACF nearly as strong or candidates suggest it
-      if (dblAcf >= selfAcf * 0.70 ||
-          (dblInCands && dblAcf >= selfAcf * 0.55)) {
-        selected = dbl;
-      }
-    }
-
-    // ---------- Musical tempo prior (light): prefer 100–140 if evidence ties ----------
-    if (selected < 92.0) {
+    // Additional musical tempo prior: prefer 100-180 range when uncertain
+    if (selected > 0 && selected < 92.0) {
       final double alt = (selected * 2.0).clamp(minBpm, maxBpm);
       final double selAcf = _acfSupportNear(selected);
       final double altAcf = _acfSupportNear(alt);
-      if (alt >= 100.0 && alt <= 140.0 && altAcf >= selAcf * 0.80) {
+
+      // If double lands in "reasonable" range and has decent support
+      if (alt >= 100.0 && alt <= 180.0 && altAcf >= selAcf * 0.70) {
         selected = alt;
       }
     }
-    // ---------------------------------------------------------------------------------
 
     final double total = math.max(1e-9, _h1Score + _h2Score + _h3Score);
     double conf = _h1Score / total;
@@ -552,7 +581,7 @@ class BpmEstimator {
       final median = _computeMedian(recent);
       if (median > 0) {
         final deviations =
-            recent.map((v) => (v - median).abs() / median).toList();
+        recent.map((v) => (v - median).abs() / median).toList();
         final avgDev = deviations.reduce((a, b) => a + b) / recent.length;
         if (avgDev < 0.03) conf = (conf * 1.15).clamp(0.0, 1.0);
       }
@@ -597,9 +626,9 @@ class BpmEstimator {
 
     final double refBpm = _emaBpm > 0 ? _emaBpm : 100.0;
     final int dynLockFrames =
-        math.max(8, (_bpmToLag(refBpm) * beatsToLock).round());
+    math.max(8, (_bpmToLag(refBpm) * beatsToLock).round());
     final int dynUnlockFrames =
-        math.max(4, (_bpmToLag(refBpm) * beatsToUnlock).round());
+    math.max(4, (_bpmToLag(refBpm) * beatsToUnlock).round());
 
     bool isLockedNow = _last.isLocked;
     if (clampLocked) {
@@ -624,13 +653,12 @@ class BpmEstimator {
     if (useKalmanFilter) {
       final double processNoise = isLockedNow ? 0.005 : 0.03;
       final double measurementNoise =
-          isLockedNow ? 0.05 : (1.0 - conf) * 1.5 + 0.1;
+      isLockedNow ? 0.05 : (1.0 - conf) * 1.5 + 0.1;
       outInternal = _kalman.update(outInternal, processNoise, measurementNoise);
     }
 
-    // Stickier when locked to prevent wobble (locked: 0.08, unlocked: 0.10)
     final double deadband =
-        _lagFracToBpmRadius(outInternal, isLockedNow ? 0.08 : 0.10);
+    _lagFracToBpmRadius(outInternal, isLockedNow ? reportDeadbandLocked : reportDeadbandUnlocked);
     double out = outInternal;
     if (_reportedBpm > 0 && (out - _reportedBpm).abs() < deadband)
       out = _reportedBpm;
@@ -647,8 +675,7 @@ class BpmEstimator {
     double s = 0.0, n1 = 0.0, n2 = 0.0;
     final int m = x.length - lag;
     for (int i = 0; i < m; i++) {
-      final double w =
-          math.pow(lambda, (m - i - 1)).toDouble(); // recent frames heavier
+      final double w = math.pow(lambda, (m - i - 1)).toDouble();
       final double a = x[i] * w;
       final double b = x[i + lag] * w;
       s += a * b;
@@ -721,7 +748,6 @@ class BpmEstimator {
     return bpm;
   }
 
-  // --------- Metronome clamp (unchanged) ----------
   double? _tryMetronomeClamp(
       double selected, List<double> candidates, double confidence) {
     _activeClampTarget = null;
@@ -787,7 +813,6 @@ class BpmEstimator {
     if (bestTarget != null) _activeClampTarget = bestTarget;
     return bestTarget;
   }
-  // -----------------------------------------------
 
   double _applyStickyTarget(double bpm, double confidence, bool isLocked) {
     if (_stickyTarget != null && confidence < stickyConfidenceThreshold) {
@@ -808,7 +833,7 @@ class BpmEstimator {
         confidence >= stickyConfidenceThreshold &&
         _bpmHist.length >= stickyMinFrames) {
       final List<double> tail =
-          _bpmHist.sublist(_bpmHist.length - stickyMinFrames);
+      _bpmHist.sublist(_bpmHist.length - stickyMinFrames);
       final double mean = tail.reduce((a, b) => a + b) / tail.length;
       final double meanRad = _lagFracToBpmRadius(mean, 0.02);
       bool tight = true;
@@ -864,7 +889,6 @@ class BpmEstimator {
 
   double _framesPerSecond() => sampleRate / frameSize;
 
-  // —— CRITICAL GUARDS: avoid division by zero / non-finite values ——
   double _bpmToLag(double bpm) {
     if (!bpm.isFinite || bpm <= 0) return 0.0;
     final fps = _framesPerSecond();
@@ -878,7 +902,6 @@ class BpmEstimator {
     if (!fps.isFinite || fps <= 0) return 0.0;
     return 60.0 / (lag / fps);
   }
-  // ————————————————————————————————————————————————
 
   double _lagFracToBpmRadius(double bpm, double frac) {
     final double lag = _bpmToLag(bpm);

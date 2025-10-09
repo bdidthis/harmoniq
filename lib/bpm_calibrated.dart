@@ -1,7 +1,6 @@
 // lib/bpm_calibrated.dart
 // Builds a BpmEstimator using a calibration "recommendation" (min/max BPM).
-// Compatible with the current BpmEstimator constructor:
-//   BpmEstimator({required sampleRate, double minBpm = 60, double maxBpm = 180})
+// NOW PROPERLY PASSES ALL PARAMETERS TO ESTIMATOR
 
 import 'bpm_estimator.dart';
 import 'calibration_tools.dart';
@@ -13,7 +12,6 @@ class EstimatorBuildArgs {
   final double emaAlpha;
   final int historyLength;
 
-  // Song-optimized parameters (not used by current ctor)
   final bool useSpectralFlux;
   final double onsetSensitivity;
   final int medianFilterSize;
@@ -21,8 +19,10 @@ class EstimatorBuildArgs {
   final double hypothesisDecay;
   final double switchThreshold;
   final int switchHoldFrames;
-  final double lockStability;
-  final double unlockStability;
+  final double lockStabilityHi;
+  final double lockStabilityLo;
+  final double beatsToLock;
+  final double beatsToUnlock;
   final double reportDeadbandUnlocked;
   final double reportDeadbandLocked;
   final double reportQuantUnlocked;
@@ -46,12 +46,14 @@ class EstimatorBuildArgs {
     this.hypothesisDecay = 0.97,
     this.switchThreshold = 1.35,
     this.switchHoldFrames = 6,
-    this.lockStability = 0.80,
-    this.unlockStability = 0.55,
+    this.lockStabilityHi = 0.80,
+    this.lockStabilityLo = 0.55,
+    this.beatsToLock = 4.5,
+    this.beatsToUnlock = 2.5,
     this.reportDeadbandUnlocked = 0.04,
-    this.reportDeadbandLocked = 0.24,
+    this.reportDeadbandLocked = 0.12,
     this.reportQuantUnlocked = 0.02,
-    this.reportQuantLocked = 0.08,
+    this.reportQuantLocked = 0.05,
     this.minEnergyDb = -60.0,
     this.fallbackMinBpm = 60.0,
     this.fallbackMaxBpm = 190.0,
@@ -60,7 +62,7 @@ class EstimatorBuildArgs {
 
 class CalibratedEstimator {
   static BpmEstimator fromRecommendation({
-    required Object rec, // dynamic-ish to cooperate with calibrator type
+    required Object rec,
     required EstimatorBuildArgs args,
   }) {
     double _readMin(Object r) {
@@ -87,10 +89,31 @@ class CalibratedEstimator {
       maxBpm = args.fallbackMaxBpm;
     }
 
+    // NOW PROPERLY PASSES ALL PARAMETERS!
     return BpmEstimator(
       sampleRate: args.sampleRate,
+      frameSize: args.frameSize,
+      windowSeconds: args.windowSeconds,
+      emaAlpha: args.emaAlpha,
+      historyLength: args.historyLength,
       minBpm: minBpm,
       maxBpm: maxBpm,
+      useSpectralFlux: args.useSpectralFlux,
+      onsetSensitivity: args.onsetSensitivity,
+      medianFilterSize: args.medianFilterSize,
+      adaptiveThresholdRatio: args.adaptiveThresholdRatio,
+      hypothesisDecay: args.hypothesisDecay,
+      switchThreshold: args.switchThreshold,
+      switchHoldFrames: args.switchHoldFrames,
+      lockStabilityHi: args.lockStabilityHi,
+      lockStabilityLo: args.lockStabilityLo,
+      beatsToLock: args.beatsToLock,
+      beatsToUnlock: args.beatsToUnlock,
+      reportDeadbandUnlocked: args.reportDeadbandUnlocked,
+      reportDeadbandLocked: args.reportDeadbandLocked,
+      reportQuantUnlocked: args.reportQuantUnlocked,
+      reportQuantLocked: args.reportQuantLocked,
+      minEnergyDb: args.minEnergyDb,
     );
   }
 }

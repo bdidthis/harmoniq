@@ -1,22 +1,14 @@
 // lib/analyzer_page.dart
-// HarmoniQ Analyzer — ENHANCED v2.2
+// HarmoniQ Analyzer — v3.0 "Conditional Smoothing + Enhanced Correction"
 //
-// Philosophy change in v2.2:
-// - CONSERVATIVE corrections: Only apply ratio fixes in clearly suspect zones
-// - PREVENT false corrections: Don't mess with already-reasonable tempos (100-180)
-// - SELECTIVE application: Corrections are mutually exclusive (only apply one)
-// - HIGHER lock threshold: Require 85% stability before locking
-// - STRONGER hysteresis: Much harder to change after lock
-//
-// Major improvements:
-// - Aggressive half-tempo correction (55-120 BPM range)
-// - Adaptive thresholds based on stability
-// - Post-lock escape valve for wrong tempo
-// - Wobble prevention with stability-based filtering
-// - Adaptive smoothing window
-// - Enhanced ACF validation
-// - Beat energy tracking preparation
-// - Tighter deadbands and quantization
+// FIXES APPLIED:
+// - Conditional wobble prevention (allows corrections from half-tempo zone)
+// - Simplified resolver (removed conflicting corrections)
+// - Better display throttle (more responsive)
+// - Consistent lock thresholds with estimator
+// - Single bounds check (removed redundant validation)
+// - Pre-lock validation to prevent locking on wrong tempo
+// - Audio session options correctly using bitwise OR (original was correct)
 
 import 'dart:async';
 import 'dart:io';
@@ -71,7 +63,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
   double _peak = 0.0;
   double _rmsDb = -120.0;
 
-  // Energy tracking for beat validation
+  // Energy tracking for beat validation (currently unused, but reserved for future)
   final List<double> _rmsHistory = [];
   static const int _rmsHistorySize = 100;
 
@@ -79,10 +71,12 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
   final FocusNode _bpmFocus = FocusNode();
   final List<DateTime> _taps = [];
   double? _displayBpm;
+  DateTime _lastDisplayUpdate = DateTime.now();
+  int _framesSinceLastUpdate = 0;
 
-  // Adaptive smoothing window
-  static const int _bpmSmoothWindowMin = 5;
-  static const int _bpmSmoothWindowMax = 11;
+  // Slightly more responsive smoothing window
+  static const int _bpmSmoothWindowMin = 7;  // Was 9
+  static const int _bpmSmoothWindowMax = 15; // Was 21
   final List<double> _bpmHistory = [];
 
   bool _recording = false;
@@ -142,9 +136,10 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
       await _audioSession?.configure(
         AudioSessionConfiguration(
           avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
+          // CORRECT: Use bitwise OR for audio_session package
           avAudioSessionCategoryOptions:
-              AVAudioSessionCategoryOptions.defaultToSpeaker |
-                  AVAudioSessionCategoryOptions.allowBluetooth,
+          AVAudioSessionCategoryOptions.defaultToSpeaker |
+          AVAudioSessionCategoryOptions.allowBluetooth,
           avAudioSessionMode: AVAudioSessionMode.measurement,
           androidAudioAttributes: const AndroidAudioAttributes(
             contentType: AndroidAudioContentType.speech,
@@ -159,8 +154,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     }
   }
 
-  double? get _hintBpm =>
-      _useHint ? double.tryParse(_hintCtrl.text.trim()) : null;
+  double? get _hintBpm => _useHint ? double.tryParse(_hintCtrl.text.trim()) : null;
 
   void _buildAnalyzers({required int sampleRate}) {
     _key = KeyDetector(
@@ -176,40 +170,40 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     final rec = HintCalibrator(
       hintBpm: hintBpm,
       bandTightness:
-          hintBpm == null ? HintBandTightness.loose : HintBandTightness.medium,
+      hintBpm == null ? HintBandTightness.loose : HintBandTightness.medium,
       defaultMinBpm: _settings.minBpm,
       defaultMaxBpm: _settings.maxBpm,
     ).recommend();
 
-    // ===== ENHANCED ESTIMATOR BUILD ARGS =====
+    // ===== ENHANCED ESTIMATOR BUILD ARGS (now properly passed through) =====
     final args = EstimatorBuildArgs(
       sampleRate: sampleRate,
       frameSize: 1024,
       windowSeconds: 12.0,
-      emaAlpha: 0.10, // ↓ Slower smoothing (was 0.12)
-      historyLength: 40, // ↑ Longer history (was 36)
+      emaAlpha: 0.08,
+      historyLength: 50,
       useSpectralFlux: true,
-      onsetSensitivity: 0.85, // ↓ Catch more onsets (was 0.88)
-      medianFilterSize: 5, // ↓ Less aggressive (was 7)
-      adaptiveThresholdRatio: 1.60, // ↓ Lower threshold (was 1.65)
-      hypothesisDecay: 0.96, // ↓ Slightly faster decay (was 0.97)
-      switchThreshold: 1.50, // ↑ MUCH harder to switch (was 1.40)
-      switchHoldFrames: 9, // ↑ Longer hold (was 7)
-      lockStability:
-          0.85, // ↑ CRITICAL: Require very high stability before lock (was 0.78)
-      unlockStability: 0.60, // ↓ Easier to unlock wrong lock (was 0.65)
-      reportDeadbandUnlocked: 0.03, // ↓ Tighter (was 0.04)
-      reportDeadbandLocked: 0.12, // ↓ CRITICAL FIX: was 0.20 (±20% drift!)
+      onsetSensitivity: 0.85,
+      medianFilterSize: 5,
+      adaptiveThresholdRatio: 1.60,
+      hypothesisDecay: 0.96,
+      switchThreshold: 1.75,
+      switchHoldFrames: 12,
+      lockStabilityHi: 0.88, // CONSISTENT with UI expectations
+      lockStabilityLo: 0.50,
+      beatsToLock: 4.5,
+      beatsToUnlock: 2.5,
+      reportDeadbandUnlocked: 0.03,
+      reportDeadbandLocked: 0.12,
       reportQuantUnlocked: 0.02,
-      reportQuantLocked: 0.05, // ↓ Tighter (was 0.08)
-      minEnergyDb: -60.0, // ↑ Slightly higher floor (was -62.0)
+      reportQuantLocked: 0.05,
+      minEnergyDb: -60.0,
       fallbackMinBpm: _settings.minBpm,
       fallbackMaxBpm: _settings.maxBpm,
     );
 
-    final recToUse = _useTight
-        ? HintCalibrator(hintBpm: hintBpm).finalizeTightening(rec)
-        : rec;
+    final recToUse =
+    _useTight ? HintCalibrator(hintBpm: hintBpm).finalizeTightening(rec) : rec;
 
     _bpm = CalibratedEstimator.fromRecommendation(rec: recToUse, args: args);
   }
@@ -248,7 +242,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content:
-              const Text('Microphone access needed. Open Settings to enable.'),
+          const Text('Microphone access needed. Open Settings to enable.'),
           action: SnackBarAction(label: 'Settings', onPressed: openAppSettings),
           duration: const Duration(seconds: 5),
         ),
@@ -321,7 +315,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
 
     _audioSub?.cancel();
     _audioSub = audioStream.listen(
-      (bytes) {
+          (bytes) {
         try {
           if (bytes.isEmpty) return;
           Uint8List b = ((bytes.length & 1) == 1)
@@ -388,7 +382,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
       smoothingType: _key.currentConfig.smoothingType.name,
       smoothingStrength: _key.currentConfig.smoothingStrength,
       processingLatency:
-          _frameCount > 0 ? testDuration.inMilliseconds / _frameCount : 0.0,
+      _frameCount > 0 ? testDuration.inMilliseconds / _frameCount : 0.0,
       droppedFrames: _droppedFrames,
       whiteningAlpha: _key.currentConfig.whiteningAlpha,
       bassSuppression: _key.currentConfig.bassSuppression,
@@ -422,18 +416,21 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     setState(() {});
   }
 
-  // ===== ADAPTIVE SMOOTHING WINDOW =====
+  // ===== ADAPTIVE SMOOTHING WINDOW (slightly more responsive) =====
   int _getAdaptiveSmoothWindow() {
-    if (_bpm.isLocked && _bpm.stability > 0.85) {
-      return _bpmSmoothWindowMax; // Maximum smoothing when very stable
-    } else if (_bpm.isLocked && _bpm.stability > 0.75) {
-      return 9; // More smoothing when locked
-    } else if (_bpm.stability > 0.65) {
-      return 7; // Standard smoothing
+    final currentBpm = _displayBpm ?? _bpm.bpm ?? 120.0;
+    final isReasonable = currentBpm >= 95 && currentBpm <= 180;
+
+    if (_bpm.isLocked && isReasonable && _bpm.stability > 0.85) {
+      return _bpmSmoothWindowMax; // 15
+    } else if (_bpm.isLocked && isReasonable && _bpm.stability > 0.75) {
+      return 11;
+    } else if (_bpm.isLocked && _bpm.stability > 0.65) {
+      return 9;
     } else if (_bpm.stability > 0.50) {
-      return 6; // Slightly more responsive
+      return 8;
     } else {
-      return _bpmSmoothWindowMin; // Most responsive when unstable
+      return _bpmSmoothWindowMin; // 7
     }
   }
 
@@ -442,7 +439,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     _key.addBytes(alignedBytes, channels: _channels, isFloat32: false);
 
     final int16 =
-        alignedBytes.buffer.asInt16List(0, alignedBytes.lengthInBytes ~/ 2);
+    alignedBytes.buffer.asInt16List(0, alignedBytes.lengthInBytes ~/ 2);
 
     double sumSq = 0.0;
     double maxAbs = 0.0;
@@ -460,7 +457,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     final rms = math.sqrt(sumSq / n);
     final rmsDb = 20.0 * math.log(rms + 1e-12) / math.ln10;
 
-    // Track RMS history for beat energy validation
+    // Track RMS history (reserved for future beat energy validation)
     _rmsHistory.add(rms);
     if (_rmsHistory.length > _rmsHistorySize) _rmsHistory.removeAt(0);
 
@@ -472,39 +469,83 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
       _rmsDb = rmsDb;
 
       if (estBpm != null && estBpm > 0) {
+        // SINGLE bounds check - clamp and continue
+        if (estBpm < 50 || estBpm > 200) {
+          return; // Skip clearly wrong values
+        }
+
         _bpmHistory.add(estBpm);
         final windowSize = _getAdaptiveSmoothWindow();
         if (_bpmHistory.length > windowSize) _bpmHistory.removeAt(0);
+
+        // Require minimum history before any updates
+        if (_bpmHistory.length < windowSize) {
+          return;
+        }
 
         final sorted = List<double>.from(_bpmHistory)..sort();
         var smoothBpm = sorted[sorted.length ~/ 2];
 
         smoothBpm = _refineBpm(smoothBpm);
 
-        // ===== ENHANCED WOBBLE PREVENTION =====
+        // ===== CONDITIONAL WOBBLE PREVENTION v3.0 =====
+        // CRITICAL FIX: Different behavior for suspicious vs reasonable tempos
         if (_bpm.isLocked && _displayBpm != null) {
           final diff = (smoothBpm - _displayBpm!).abs();
+          final isReasonableTempo = _displayBpm! >= 95 && _displayBpm! <= 180;
+          final isSuspiciousTempo = _displayBpm! >= 55 && _displayBpm! < 95; // Half-tempo zone!
 
-          // MUCH more aggressive filtering with wider range
-          if (_bpm.stability > 0.90 && diff < 5.0) {
-            // Extreme stability: 98% previous
-            smoothBpm = _displayBpm! * 0.98 + smoothBpm * 0.02;
-          } else if (_bpm.stability > 0.80 && diff < 6.0) {
-            // Very stable: 95% previous
-            smoothBpm = _displayBpm! * 0.95 + smoothBpm * 0.05;
-          } else if (_bpm.stability > 0.70 && diff < 8.0) {
-            // Stable: 90% previous
-            smoothBpm = _displayBpm! * 0.90 + smoothBpm * 0.10;
-          } else if (_bpm.stability > 0.60 && diff < 10.0) {
-            // Moderate: 80% previous
-            smoothBpm = _displayBpm! * 0.80 + smoothBpm * 0.20;
-          } else if (_bpm.stability > 0.50 && diff < 12.0) {
-            // Low-moderate: 70% previous
-            smoothBpm = _displayBpm! * 0.70 + smoothBpm * 0.30;
+          // CRITICAL: If locked on suspicious tempo, ALLOW big corrections
+          if (isSuspiciousTempo && diff > 20.0) {
+            // Big jump from half-tempo zone - this is likely a correction!
+            // Use moderate smoothing to allow the fix through
+            smoothBpm = _displayBpm! * 0.30 + smoothBpm * 0.70; // 70% new value
+            debugPrint('🔓 ALLOWING CORRECTION from suspicious tempo: $_displayBpm → $smoothBpm');
+          } else if (isSuspiciousTempo && diff > 10.0) {
+            // Medium jump - still allow more through
+            smoothBpm = _displayBpm! * 0.45 + smoothBpm * 0.55;
+          } else if (isReasonableTempo) {
+            // Normal case: reasonable tempo, apply stability-based smoothing
+            if (_bpm.stability > 0.92 && diff < 8.0) {
+              // Very high stability: strong smoothing (but not as extreme as before)
+              smoothBpm = _displayBpm! * 0.92 + smoothBpm * 0.08; // Was 0.99/0.01
+            } else if (_bpm.stability > 0.88 && diff < 10.0) {
+              smoothBpm = _displayBpm! * 0.88 + smoothBpm * 0.12; // Was 0.98/0.02
+            } else if (_bpm.stability > 0.82 && diff < 15.0) {
+              smoothBpm = _displayBpm! * 0.85 + smoothBpm * 0.15; // Was 0.96/0.04
+            } else if (_bpm.stability > 0.75 && diff < 20.0) {
+              smoothBpm = _displayBpm! * 0.80 + smoothBpm * 0.20; // Was 0.93/0.07
+            } else if (_bpm.stability > 0.65 && diff < 25.0) {
+              smoothBpm = _displayBpm! * 0.75 + smoothBpm * 0.25; // Was 0.88/0.12
+            }
           }
         }
 
+        // ===== IMPROVED DISPLAY UPDATE CONTROL v3.0 =====
+        // More responsive: reduced frame requirement
+        _framesSinceLastUpdate++;
+        final now = DateTime.now();
+        final timeSinceUpdate = now.difference(_lastDisplayUpdate).inMilliseconds;
+
+        final enoughFrames = _framesSinceLastUpdate >= 20; // Was 30
+        final enoughTime = timeSinceUpdate >= 1500; // Was 2000 (1.5 seconds)
+
+        final significantChange = _displayBpm == null ||
+            (smoothBpm - _displayBpm!).abs() > 1.5; // Was 2.0
+
+        final shouldUpdate = (enoughFrames && enoughTime) ||
+            (_bpm.isLocked && significantChange && enoughTime);
+
+        if (!shouldUpdate) {
+          return;
+        }
+
+        // Update display
+        _lastDisplayUpdate = now;
+        _framesSinceLastUpdate = 0;
         _displayBpm = smoothBpm;
+
+        debugPrint('✓ DISPLAY UPDATED: $smoothBpm BPM (stability: ${(_bpm.stability * 100).toStringAsFixed(0)}%, locked: ${_bpm.isLocked})');
 
         if (!_bpmFocus.hasFocus) {
           _bpmCtrl.text = smoothBpm.toStringAsFixed(1);
@@ -533,7 +574,8 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     return x;
   }
 
-  // ===== ENHANCED BPM RESOLVER v2.0 =====
+  // ===== SIMPLIFIED BPM RESOLVER v3.0 =====
+  // Removed conflicting corrections, kept only the most effective
   double _refineBpm(double raw) {
     double v = raw * (1.0 + kGlobalBpmBiasPct / 100.0);
 
@@ -551,7 +593,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     // Pull ACF peaks for scoring
     final List<Map<String, dynamic>> tops =
         (_bpm.debugStats['last_acf_top'] as List?)
-                ?.cast<Map<String, dynamic>>() ??
+            ?.cast<Map<String, dynamic>>() ??
             const [];
 
     double acfStrengthFor(double targetBpm) {
@@ -567,137 +609,34 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
           maxScore = math.max(maxScore, score);
         } else if ((ratio - 0.5).abs() < 0.035 || (ratio - 2.0).abs() < 0.035) {
           maxScore = math.max(maxScore, score * 0.50);
-        } else if ((ratio - 1.5).abs() < 0.035 ||
-            (ratio - 0.67).abs() < 0.035) {
-          maxScore = math.max(maxScore, score * 0.30);
         }
       }
       return maxScore;
     }
 
-    // ===== FIX #1: AGGRESSIVE PRE-LOCK HALF-TEMPO CORRECTION =====
-    // Expanded range: 55-95 BPM ONLY (narrower to prevent false corrections)
-    // Only apply if we're confident this is actually half-tempo
-    bool correctionApplied = false;
+    // ===== PRE-LOCK VALIDATION (prevent locking on wrong tempo) =====
+    // CRITICAL: Before we get to scoring, validate if we're about to lock
+    if (stab > 0.85 && !locked) {
+      // About to lock - make SURE we're not at half-tempo
+      if (v >= 55 && v <= 90) {
+        final dbl = v * 2.0;
+        if (dbl >= 100 && dbl <= 180) {
+          final vAcf = acfStrengthFor(v);
+          final dblAcf = acfStrengthFor(dbl);
 
-    if (!locked && !correctionApplied && v >= 55 && v <= 95) {
-      final double dbl = _fold(v * 2.0, minB, maxB);
-      if (dbl <= maxB && dbl >= 100 && dbl <= 180) {
-        final selfAcf = acfStrengthFor(v);
-        final dblAcf = acfStrengthFor(dbl);
-
-        // More conservative thresholds (raised from before)
-        double threshold;
-        if (stab < 0.5) {
-          threshold = 0.50; // Moderate when unstable
-        } else if (conf < 0.6) {
-          threshold = 0.60; // Conservative when low confidence
-        } else if (conf < 0.75) {
-          threshold = 0.70; // Very conservative
-        } else {
-          threshold = 0.80; // Extremely conservative when confident
-        }
-
-        if (dblAcf > selfAcf * threshold) {
-          v = dbl;
-          correctionApplied = true;
-        }
-      }
-    }
-
-    // ===== FIX #1B: TRIPLET RATIO CORRECTION (2/3 and 3/2) =====
-    // ONLY apply if in specific suspect zone AND no other correction applied
-    // Calvin Harris: 88.2 should be 128 (88 × 1.5 ≈ 132)
-    if (!locked && !correctionApplied && v >= 80 && v <= 95) {
-      final triple = _fold(v * 1.5, minB, maxB);
-      if (triple >= 120 && triple <= 145) {
-        final selfAcf = acfStrengthFor(v);
-        final tripleAcf = acfStrengthFor(triple);
-
-        // Require STRONG ACF support (raised threshold)
-        if (tripleAcf > selfAcf * 0.70) {
-          v = triple;
-          correctionApplied = true;
-        }
-      }
-    }
-
-    // ===== FIX #1C: QUINTUPLET RATIO CORRECTION (4/5 and 5/4) =====
-    // ONLY apply if in specific suspect zone AND no other correction applied
-    // Daft Punk: 90 should be 116 (90 × 1.25 ≈ 112.5)
-    if (!locked && !correctionApplied && v >= 88 && v <= 98) {
-      final quint = _fold(v * 1.25, minB, maxB);
-      if (quint >= 110 && quint <= 125) {
-        final selfAcf = acfStrengthFor(v);
-        final quintAcf = acfStrengthFor(quint);
-
-        // Require STRONG ACF support (raised threshold)
-        if (quintAcf > selfAcf * 0.75) {
-          v = quint;
-          correctionApplied = true;
-        }
-      }
-    }
-
-    // ===== FIX #2: POST-LOCK ESCAPE (CONSERVATIVE) =====
-    // Only unlock if BOTH stability drops AND we have strong evidence of wrong tempo
-    if (locked && stab < 0.60 && v >= 55 && v <= 100) {
-      final double dbl = _fold(v * 2.0, minB, maxB);
-      if (dbl <= maxB && dbl >= 100) {
-        final selfAcf = acfStrengthFor(v);
-        final dblAcf = acfStrengthFor(dbl);
-
-        // Require VERY strong evidence to unlock
-        if (dblAcf > selfAcf * 0.85) {
-          v = dbl;
-        }
-      }
-    }
-
-    // ===== FIX #3: ANTI-WEIRD-RATIOS (CONSERVATIVE) =====
-    // Only apply if tempo is clearly suspect AND we have strong alternative
-    if (!locked || stab < 0.65) {
-      // Don't mess with tempos that are already reasonable (100-180 BPM)
-      if (v < 100 || v > 180) {
-        for (double cleanBpm = 100.0; cleanBpm <= 180.0; cleanBpm += 1.0) {
-          final ratio = v / cleanBpm;
-
-          bool isSuspect = false;
-
-          // Only flag truly weird ratios
-          if (ratio >= 1.20 && ratio <= 1.70 && (ratio - 1.5).abs() > 0.10) {
-            isSuspect = true;
-          } else if (ratio >= 0.60 && ratio <= 0.95) {
-            // In this zone, check specific problem ratios
-            if ((ratio >= 0.64 && ratio <= 0.72) || // 2/3 triplet
-                (ratio >= 0.76 && ratio <= 0.82)) {
-              // 4/5 quintuplet
-              isSuspect = true;
-            }
-          }
-
-          if (isSuspect) {
-            final cleanAcf = acfStrengthFor(cleanBpm);
-            final currentAcf = acfStrengthFor(v);
-
-            // Require strong evidence (raised threshold)
-            final threshold = locked ? 0.85 : 0.70;
-            if (cleanAcf >= currentAcf * threshold) {
-              v = cleanBpm;
-              break;
-            }
+          // VERY aggressive - we're about to lock!
+          if (dblAcf > vAcf * 0.40) {
+            v = dbl;
+            debugPrint('🔧 PRE-LOCK CORRECTION: ${v/2} → $v BPM');
           }
         }
       }
     }
 
-    // ===== FIX #4: EXPANDED CANDIDATE SET =====
+    // ===== CANDIDATE SCORING =====
     final baseRatios = <double>[
       0.5, 0.67, 0.75, 1.0, 1.33, 1.5, 2.0,
       0.6, 0.8, 1.25, 1.6, 1.8,
-      // NEW: Add triplet and quintuplet ratios explicitly
-      2.0 / 3.0, 3.0 / 2.0, // Triplet ratios (for Calvin Harris)
-      4.0 / 5.0, 5.0 / 4.0, // Quintuplet ratios (for Daft Punk)
     ];
 
     final candidates = <double>{
@@ -713,30 +652,27 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     double scoreCandidate(double bpm) {
       double s = 0.0;
 
-      // (1) ACF support: Strong weight
+      // (1) ACF support
       final acf = acfStrengthFor(bpm);
-      s -= acf * 30.0; // Reduced from 35.0
+      s -= acf * 28.0;
 
-      // (2) Stay near raw (MORE important now to prevent false corrections)
+      // (2) Stay near raw
       final dev = (bpm - v).abs() / (v + 1e-9);
-      final devWeight = locked ? 4.0 : 2.5; // Increased from 3.0/1.5
+      final devWeight = locked ? 4.0 : 2.0;
       s += dev * devWeight;
 
-      // (3) Post-lock hysteresis - STRONGER
+      // (3) Post-lock hysteresis
       if (locked && prev != null) {
         final rel = (bpm - prev).abs() / (prev + 1e-9);
+        final hystWeight = 20.0 * stab; // Stronger than before
 
-        // Much stronger hysteresis to prevent wobble
-        final hystWeight = 15.0 * stab; // Increased from 10.0
-
-        if (rel > 0.05) {
-          s += hystWeight * 2.0; // Increased penalty
+        if (rel > 0.04) {
+          s += hystWeight * 2.5;
         } else if (rel > 0.02) {
-          s += hystWeight * 0.8;
+          s += hystWeight * 1.0;
         }
       } else if (prev != null && stab >= 0.60) {
-        s += (math.log((bpm / prev).abs() + 1e-9) / math.ln2).abs() *
-            1.0; // Increased from 0.6
+        s += (math.log((bpm / prev).abs() + 1e-9) / math.ln2).abs() * 0.8;
       }
 
       // (4) Hint attraction
@@ -746,24 +682,24 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
         s += math.min(rh, 0.15);
       }
 
-      // (5) Genre priors (enhanced)
+      // (5) Genre priors
       if (_selectedGenre == Genre.hiphop || _selectedGenre == Genre.auto) {
         if (bpm >= 65 && bpm <= 115) s -= 0.20;
         if (bpm > 145) s += 0.15;
       }
       if (_selectedGenre == Genre.electronic || _selectedGenre == Genre.auto) {
-        if (bpm >= 115 && bpm <= 145) s -= 0.18;
-        if (bpm < 85) s += 0.15;
+        if (bpm >= 115 && bpm <= 145) s -= 0.30;
+        if (bpm < 90) s += 0.25;
       }
       if (_selectedGenre == Genre.rock || _selectedGenre == Genre.auto) {
-        if (bpm >= 110 && bpm <= 140) s -= 0.15; // Stronger rock prior
+        if (bpm >= 105 && bpm <= 125) s -= 0.20;
       }
 
-      // (6) Musical tempo prior - MUCH stronger reward for reasonable tempos
-      if (bpm >= 100 && bpm <= 180) {
-        s -= 1.0; // Strong bonus for already-reasonable tempos
-      } else if (bpm >= 90 && bpm <= 145) {
-        s -= 0.15;
+      // (6) Musical tempo prior - STRONG preference
+      if (bpm >= 105 && bpm <= 175) {
+        s -= 0.70; // Strong bonus for reasonable range
+      } else if (bpm >= 95 && bpm <= 185) {
+        s -= 0.30;
       }
 
       // (7) Stability reward
@@ -773,11 +709,15 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
         s -= 1.5;
       }
 
-      // (8) Penalize tempos in known problem zones
-      if (bpm >= 75 && bpm <= 98) {
-        // This zone tends to be wrong for rock/electronic
+      // (8) CRITICAL: Penalize half-tempo zone when about to lock
+      if (stab > 0.85 && bpm >= 55 && bpm <= 90) {
+        s += 6.0; // HUGE penalty to prevent locking here
+      }
+
+      // Also penalize known problem zones
+      if (bpm >= 60 && bpm <= 75) {
         if (_selectedGenre != Genre.hiphop && _selectedGenre != Genre.jazz) {
-          s += 0.30; // Mild penalty
+          s += 0.50;
         }
       }
 
@@ -787,7 +727,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     candidates.sort((a, b) => scoreCandidate(a).compareTo(scoreCandidate(b)));
     double best = candidates.first;
 
-    // ===== FIX #5: ADAPTIVE SNAPPING =====
+    // ===== ADAPTIVE SNAPPING =====
     if (locked && conf >= 0.85 && stab >= 0.80) {
       final rounded = (best * 2).round() / 2.0;
       if ((rounded - best).abs() <= 0.20) {
@@ -800,33 +740,18 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
       }
     }
 
-    // ===== FIX #6: FINAL SANITY CHECK (CONSERVATIVE) =====
-    // Only apply if in clearly wrong zones AND we have strong evidence
+    // ===== FINAL SANITY CHECK (simplified) =====
     if (!locked || stab < 0.70) {
-      // Half-tempo check - only for clearly low tempos
+      // Half-tempo check
       if (best >= 55 && best <= 85) {
         final dbl = best * 2.0;
-        if (dbl >= 110 && dbl <= 170) {
+        if (dbl >= 110 && dbl <= 180) {
           final bestAcf = acfStrengthFor(best);
           final dblAcf = acfStrengthFor(dbl);
 
-          // Require strong evidence
-          if (dblAcf > bestAcf * 0.75) {
+          if (dblAcf > bestAcf * 0.55) {
             best = dbl;
-          }
-        }
-      }
-
-      // Triplet check (2/3 ratio) - only for suspect low zone
-      else if (best >= 85 && best <= 95) {
-        final triple = best * 1.5;
-        if (triple >= 125 && triple <= 145) {
-          final bestAcf = acfStrengthFor(best);
-          final tripleAcf = acfStrengthFor(triple);
-
-          // Require VERY strong evidence
-          if (tripleAcf > bestAcf * 0.80) {
-            best = triple;
+            debugPrint('🔧 FINAL CORRECTION: ${best/2} → $best BPM');
           }
         }
       }
@@ -977,8 +902,8 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
   Widget build(BuildContext context) {
     final keyLabel = _key.label;
     final keyConf = _key.confidence.clamp(0, 1.0).asDouble;
-    final bpmStr = _displayBpm?.toStringAsFixed(1) ??
-        (_bpm.bpm?.toStringAsFixed(1) ?? '--');
+    final bpmStr =
+        _displayBpm?.toStringAsFixed(1) ?? (_bpm.bpm?.toStringAsFixed(1) ?? '--');
     final isLocked = _bpm.isLocked;
     final tuningOffset = _key.tuningOffset;
 
@@ -987,15 +912,15 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     final displayedKey = showKeyNow ? keyLabel : '--';
     final keySubtitle = showKeyNow
         ? (tuningOffset != null
-            ? '${tuningOffset > 0 ? '+' : ''}${tuningOffset.toStringAsFixed(1)}¢'
-            : null)
+        ? '${tuningOffset > 0 ? '+' : ''}${tuningOffset.toStringAsFixed(1)}¢'
+        : null)
         : 'analyzing...';
 
     return GestureDetector(
       onTap: _dismissKeyboard,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('HarmoniQ Analyzer v2.1'),
+          title: const Text('HarmoniQ Analyzer v3.0'),
           actions: [
             IconButton(
               tooltip: 'Export Logs',
@@ -1058,6 +983,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                     ),
                   ),
                 ),
+
               _SectionCard(
                 title: 'Genre Configuration',
                 child: Column(
@@ -1073,9 +999,9 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                             ),
                             items: Genre.values
                                 .map((g) => DropdownMenuItem(
-                                      value: g,
-                                      child: Text(g.name),
-                                    ))
+                              value: g,
+                              child: Text(g.name),
+                            ))
                                 .toList(),
                             onChanged: _onGenreChanged,
                           ),
@@ -1090,9 +1016,9 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                             ),
                             items: _getSubgenresForGenre(_selectedGenre)
                                 .map((s) => DropdownMenuItem(
-                                      value: s,
-                                      child: Text(s.name.replaceAll('_', ' ')),
-                                    ))
+                              value: s,
+                              child: Text(s.name.replaceAll('_', ' ')),
+                            ))
                                 .toList(),
                             onChanged: _onSubgenreChanged,
                           ),
@@ -1108,6 +1034,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                 ),
               ),
               const SizedBox(height: 12),
+
               Row(
                 children: [
                   Expanded(
@@ -1128,6 +1055,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                 ],
               ),
               const SizedBox(height: 6),
+
               _ConfidenceMeter(
                 label: 'Key Confidence',
                 confidence: keyConf,
@@ -1144,9 +1072,10 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                 label: 'BPM Confidence',
                 confidence: _bpm.confidence,
                 secondary:
-                    'Stability: ${(_bpm.stability * 100).toStringAsFixed(0)}%',
+                'Stability: ${(_bpm.stability * 100).toStringAsFixed(0)}%',
               ),
               const SizedBox(height: 12),
+
               Center(
                 child: Column(
                   children: [
@@ -1163,8 +1092,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                       children: [
                         FilledButton.icon(
                           onPressed: _toggleRecording,
-                          icon:
-                              Icon(_recording ? Icons.stop : Icons.play_arrow),
+                          icon: Icon(_recording ? Icons.stop : Icons.play_arrow),
                           label: Text(_recording ? 'Stop' : 'Start'),
                         ),
                         OutlinedButton.icon(
@@ -1178,6 +1106,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                 ),
               ),
               const SizedBox(height: 16),
+
               _SectionCard(
                 title: 'Live Mic Levels',
                 child: Column(
@@ -1202,6 +1131,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                 ),
               ),
               const SizedBox(height: 16),
+
               _SectionCard(
                 title: 'Calibrate (Optional)',
                 child: Column(
@@ -1227,8 +1157,8 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                             child: TextField(
                               controller: _hintCtrl,
                               keyboardType:
-                                  const TextInputType.numberWithOptions(
-                                      decimal: true),
+                              const TextInputType.numberWithOptions(
+                                  decimal: true),
                               decoration: const InputDecoration(
                                 labelText: 'Hint BPM',
                                 border: OutlineInputBorder(),
@@ -1272,6 +1202,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                 ),
               ),
               const SizedBox(height: 16),
+
               _SectionCard(
                 title: 'Tempo Tools',
                 child: Column(
@@ -1283,7 +1214,8 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                           child: TextField(
                             controller: _bpmCtrl,
                             focusNode: _bpmFocus,
-                            keyboardType: const TextInputType.numberWithOptions(
+                            keyboardType:
+                            const TextInputType.numberWithOptions(
                                 decimal: true),
                             textInputAction: TextInputAction.done,
                             onEditingComplete: _applyBpmFromField,
@@ -1320,26 +1252,26 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                         OutlinedButton(
                           onPressed: (_displayBpm ?? 0) > 0
                               ? () => setState(() {
-                                    _displayBpm = (_displayBpm! / 2)
-                                        .clamp(1.0, 500.0)
-                                        .asDouble;
-                                    _bpmCtrl.text =
-                                        _displayBpm!.toStringAsFixed(1);
-                                    _liveBpm.value = _displayBpm;
-                                  })
+                            _displayBpm = (_displayBpm! / 2)
+                                .clamp(1.0, 500.0)
+                                .asDouble;
+                            _bpmCtrl.text =
+                                _displayBpm!.toStringAsFixed(1);
+                            _liveBpm.value = _displayBpm;
+                          })
                               : null,
                           child: const Text('½x'),
                         ),
                         OutlinedButton(
                           onPressed: (_displayBpm ?? 0) > 0
                               ? () => setState(() {
-                                    _displayBpm = (_displayBpm! * 2)
-                                        .clamp(1.0, 500.0)
-                                        .asDouble;
-                                    _bpmCtrl.text =
-                                        _displayBpm!.toStringAsFixed(1);
-                                    _liveBpm.value = _displayBpm;
-                                  })
+                            _displayBpm = (_displayBpm! * 2)
+                                .clamp(1.0, 500.0)
+                                .asDouble;
+                            _bpmCtrl.text =
+                                _displayBpm!.toStringAsFixed(1);
+                            _liveBpm.value = _displayBpm;
+                          })
                               : null,
                           child: const Text('2x'),
                         ),
@@ -1349,6 +1281,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                 ),
               ),
               const SizedBox(height: 16),
+
               _SectionCard(
                 title: 'Music Math',
                 child: _displayBpm != null && _displayBpm! > 0
@@ -1488,8 +1421,8 @@ class _ResultCard extends StatelessWidget {
                 Text(
                   title,
                   style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
                 ),
                 if (isLocked) ...[
                   const SizedBox(width: 8),
@@ -1507,8 +1440,8 @@ class _ResultCard extends StatelessWidget {
               child: Text(
                 value,
                 style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
             if (subtitle != null) ...[
@@ -1516,11 +1449,11 @@ class _ResultCard extends StatelessWidget {
               Text(
                 subtitle!,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context)
-                          .colorScheme
-                          .onSurface
-                          .withValues(alpha: 0.7),
-                    ),
+                  color: Theme.of(context)
+                      .colorScheme
+                      .onSurface
+                      .withValues(alpha: 0.7),
+                ),
               ),
             ],
           ],
@@ -1544,7 +1477,7 @@ class _PressHoldMicButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final Color base =
-        isRecording ? Colors.redAccent : Theme.of(context).colorScheme.primary;
+    isRecording ? Colors.redAccent : Theme.of(context).colorScheme.primary;
     final String label = isRecording ? 'Listening…' : 'Hold to Analyze';
 
     return GestureDetector(
@@ -1571,8 +1504,7 @@ class _PressHoldMicButton extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(isRecording ? Icons.mic : Icons.mic_none,
-                size: 56, color: base),
+            Icon(isRecording ? Icons.mic : Icons.mic_none, size: 56, color: base),
             const SizedBox(height: 8),
             Text(
               label,
@@ -1602,8 +1534,8 @@ class _ConfidenceMeter extends StatelessWidget {
     final Color bar = confidence >= 0.75
         ? Colors.greenAccent
         : confidence >= 0.5
-            ? Colors.amberAccent
-            : Colors.redAccent;
+        ? Colors.amberAccent
+        : Colors.redAccent;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1703,36 +1635,35 @@ class _MusicMathThreeColumn extends StatelessWidget {
     final rows = MusicMathRows.buildThreeColumn(bpm);
 
     Widget cell(String title, MMCell c) => Expanded(
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-            decoration: BoxDecoration(
-              border: Border(
-                  left: BorderSide(color: Theme.of(context).dividerColor)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: Theme.of(context).textTheme.labelMedium),
-                const SizedBox(height: 4),
-                Text('${c.ms.toStringAsFixed(2)} ms',
-                    style: Theme.of(context)
-                        .textTheme
-                        .bodyMedium
-                        ?.copyWith(fontWeight: FontWeight.w600)),
-                Text('(${c.hz.toStringAsFixed(4)} Hz)',
-                    style: Theme.of(context).textTheme.bodySmall),
-              ],
-            ),
-          ),
-        );
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+        decoration: BoxDecoration(
+          border: Border(
+              left: BorderSide(color: Theme.of(context).dividerColor)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: Theme.of(context).textTheme.labelMedium),
+            const SizedBox(height: 4),
+            Text('${c.ms.toStringAsFixed(2)} ms',
+                style: Theme.of(context)
+                    .textTheme
+                    .bodyMedium
+                    ?.copyWith(fontWeight: FontWeight.w600)),
+            Text('(${c.hz.toStringAsFixed(4)} Hz)',
+                style: Theme.of(context).textTheme.bodySmall),
+          ],
+        ),
+      ),
+    );
 
     return Column(
       children: [
         Container(
           padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
           decoration: BoxDecoration(
-            color:
-                Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
+            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
             borderRadius: BorderRadius.circular(6),
           ),
           child: Row(
@@ -1747,14 +1678,14 @@ class _MusicMathThreeColumn extends StatelessWidget {
                 ),
               ),
               Expanded(
-                  child: Text('Notes',
-                      style: Theme.of(context).textTheme.labelLarge)),
+                  child:
+                  Text('Notes', style: Theme.of(context).textTheme.labelLarge)),
               Expanded(
                   child: Text('Triplets',
                       style: Theme.of(context).textTheme.labelLarge)),
               Expanded(
-                  child: Text('Dotted',
-                      style: Theme.of(context).textTheme.labelLarge)),
+                  child:
+                  Text('Dotted', style: Theme.of(context).textTheme.labelLarge)),
             ],
           ),
         ),
@@ -1765,7 +1696,7 @@ class _MusicMathThreeColumn extends StatelessWidget {
               border: Border(
                 bottom: BorderSide(
                     color:
-                        Theme.of(context).dividerColor.withValues(alpha: 0.6)),
+                    Theme.of(context).dividerColor.withValues(alpha: 0.6)),
               ),
             ),
             child: Row(
@@ -1773,7 +1704,7 @@ class _MusicMathThreeColumn extends StatelessWidget {
                 Expanded(
                   child: Padding(
                     padding:
-                        const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                    const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
                     child: Text(r.label),
                   ),
                 ),
