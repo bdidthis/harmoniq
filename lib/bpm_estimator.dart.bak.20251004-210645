@@ -1,0 +1,1023 @@
+// lib/bpm_estimator.dart
+// HarmoniQ BPM Estimator — v5.4 “Particles + MAD + Octave-Safe”
+//
+// What’s new vs v5.3:
+// • Optional particle filter in lag space (12 particles) replaces 3-hypothesis path
+//   when enabled (default: true). Entropy → confidence.
+// • Everything else from v5.3 stays: MAD stability, multi-frame octave rescue,
+//   exponential ACF weighting + comb boost, perceptual/harmonic spectral-flux,
+//   whitening, beat-normalized lock, Kalman display smoothing, sticky fixes,
+//   legacy clamps (off by default).
+//
+// Toggle with: BpmEstimator(useParticleFilter: true/false)
+
+import 'dart:math' as math;
+import 'dart:typed_data';
+
+class BpmEstimate {
+  final double bpm;         // reported (smoothed/quantized for UI)
+  final double stability;   // 0..1
+  final bool isLocked;
+  final double confidence;  // 0..1
+  const BpmEstimate(this.bpm, this.stability, this.isLocked, this.confidence);
+}
+
+class _FftResult {
+  final List<double> real;
+  final List<double> imag;
+  _FftResult(this.real, this.imag);
+}
+
+class _KalmanFilter {
+  double _estimate = 0.0;
+  double _errorCovariance = 1.0;
+
+  double update(double measurement, double processNoise, double measurementNoise) {
+    _errorCovariance += processNoise;
+    final k = _errorCovariance / (_errorCovariance + measurementNoise);
+    _estimate = _estimate + k * (measurement - _estimate);
+    _errorCovariance = (1 - k) * _errorCovariance;
+    return _estimate;
+  }
+
+  void reset(double value) {
+    _estimate = value;
+    _errorCovariance = 1.0;
+  }
+}
+
+// ---------------- Particle filter (optional path) ----------------
+
+class _Particle {
+  double lag;        // frames per beat
+  double weight;
+  double velocity;   // lag change per frame (for accelerando)
+  _Particle(this.lag, this.weight, [this.velocity = 0.0]);
+}
+
+class BpmEstimator {
+  // -------- Public API --------
+  double? get bpm => _last.bpm > 0 ? _last.bpm : null;
+  double get stability => _last.stability;
+  bool get isLocked => _last.isLocked;
+  double get confidence => _last.confidence;
+
+  Map<String, dynamic> get debugStats => <String, dynamic>{
+    'env_len': _onsetCurve.length,
+    'energy_db': _energyDb,
+    'written_frames': _envelopesWritten,
+    'window_frames': _framesPerWindow,
+    'last_frame_rms': _lastFrameRms,
+    'format_guess': _formatGuess,
+    if (!useParticleFilter) 'hypotheses': {
+      'h1_bpm': _h1Bpm, 'h1_score': _h1Score,
+      'h2_bpm': _h2Bpm, 'h2_score': _h2Score,
+      'h3_bpm': _h3Bpm, 'h3_score': _h3Score,
+    },
+    if (useParticleFilter) 'particles': {
+      'count': _particles.length,
+      'ess': _lastEss,
+    },
+    'last_acf_top': _lastAcfTop,
+    'octave_history': _octaveHistory,
+    'recent_candidates': _recentCandidates.length,
+    'last_accepted_lag': _lastAcceptedLag,
+    'sticky_target': _stickyTarget,
+    'legacy_clamps_enabled': legacyClampsEnabled,
+  };
+
+  // -------- Tunables --------
+  final int sampleRate;
+  final int frameSize;
+  final double windowSeconds;
+
+  final double emaAlpha;
+  final int historyLength;
+
+  final double minBpm;
+  final double maxBpm;
+
+  // Onset / spectral flux
+  final bool useSpectralFlux;
+  final double onsetSensitivity;
+  final int medianFilterSize;
+  final double adaptiveThresholdRatio;
+  final bool enableWhitening;
+
+  // Particle filter toggle
+  final bool useParticleFilter;
+
+  // Hypothesis manager (used when useParticleFilter=false)
+  final double hypothesisDecay;
+  final double switchThreshold;
+  final int switchHoldFrames;
+
+  // Locking & reporting (beat-normalized)
+  final double lockStabilityHi;
+  final double lockStabilityLo;
+  final double beatsToLock;
+  final double beatsToUnlock;
+  final double reportQuantUnlocked;
+  final double reportQuantLocked;
+  final double minEnergyDb;
+
+  // Priors/guards (generic)
+  final double halfPenaltyBase;
+  final double lagPriorStrength;
+  final double captureFracStrong;   // fraction of beat
+  final double captureFracWeak;     // fraction of beat
+  final double holdFracLocked;      // fraction of beat
+  final double holdFracUnlocked;    // fraction of beat
+  final double repelFracLowConf;    // fraction of beat
+  final double repelFracHiConf;     // fraction of beat
+  final double rescueTolStrong;     // tolerance for 0.5x/2x (ratio)
+  final double rescueTolWeak;
+
+  // OPTIONAL: legacy hard clamps (for demo safety)
+  final bool legacyClampsEnabled;
+  final List<double> legacyTargets;     // e.g., [83.1, 92.3, 103.5, 120.0]
+  final double legacyClampRadius;       // BPM radius to snap
+  final bool legacyPromote60To120;      // promote ~60→120 when plausible
+
+  // -------- Internal state --------
+  late final int _framesPerWindow;
+  final List<double> _frame = <double>[];
+  final List<double> _hann;
+  final List<double> _onsetCurve = <double>[];
+  final List<double> _onsetHist = <double>[];
+  final List<double> _bpmHist = <double>[];
+
+  final List<double> _prevMag;
+  final List<double> _smoothMag;
+
+  // Hypotheses (disabled when particles are used)
+  double _h1Bpm = 0.0, _h1Score = 0.0;
+  double _h2Bpm = 0.0, _h2Score = 0.0;
+  double _h3Bpm = 0.0, _h3Score = 0.0;
+  int _switchHold = 0;
+
+  // Particles
+  final List<_Particle> _particles = <_Particle>[];
+  double _lastEss = 0.0;
+
+  double _emaBpm = 0.0;        // internal smoother (pre-display)
+  double _reportedBpm = 0.0;   // last displayed (for deadband)
+  int _envelopesWritten = 0;
+  List<Map<String, double>> _lastAcfTop = <Map<String, double>>[];
+
+  BpmEstimate _last = const BpmEstimate(0.0, 0.0, false, 0.0);
+  double _lastFrameRms = 0.0;
+  double _energyDb = -120.0;
+  String _formatGuess = 'pcm16';
+
+  // Octave tracking & candidate memory
+  final List<double> _octaveHistory = <double>[];
+  static const int _octaveHistorySize = 24;
+  final List<List<double>> _recentCandidates = <List<double>>[]; // last 5 frames
+
+  // Lag-domain prior anchor (frames/beat)
+  double _lastAcceptedLag = -1.0;
+
+  // Lock hysteresis counters (frames)
+  int _lockGoodFrames = 0;
+  int _lockBadFrames = 0;
+
+  // Sticky snap target (exact BPM)
+  double? _stickyTarget;
+
+  // Display smoother
+  final _KalmanFilter _displayFilter = _KalmanFilter();
+
+  BpmEstimator({
+    required this.sampleRate,
+    this.frameSize = 1024,
+    this.windowSeconds = 12.0,
+    this.emaAlpha = 0.12,
+    this.historyLength = 24,
+
+    this.minBpm = 60.0,
+    this.maxBpm = 190.0,
+
+    this.useSpectralFlux = true,
+    this.onsetSensitivity = 0.9,
+    this.medianFilterSize = 9,
+    this.adaptiveThresholdRatio = 1.7,
+    this.enableWhitening = true,
+
+    this.useParticleFilter = true,
+
+    this.hypothesisDecay = 0.97,
+    this.switchThreshold = 1.35,
+    this.switchHoldFrames = 4,
+
+    // Revised locking
+    this.lockStabilityHi = 0.85,
+    this.lockStabilityLo = 0.55,
+    this.beatsToLock = 4.0,
+    this.beatsToUnlock = 2.5,
+    this.reportQuantUnlocked = 0.05,
+    this.reportQuantLocked = 0.10,
+
+    this.minEnergyDb = -65.0,
+
+    // Priors/guards revised
+    this.halfPenaltyBase = 0.28,
+    this.lagPriorStrength = 0.12,
+    this.captureFracStrong = 0.03,
+    this.captureFracWeak = 0.04,
+    this.holdFracLocked = 0.08,
+    this.holdFracUnlocked = 0.06,
+    this.repelFracLowConf = 0.12,
+    this.repelFracHiConf  = 0.07,
+    this.rescueTolStrong = 0.03,
+    this.rescueTolWeak   = 0.05,
+
+    // Optional legacy safety nets (OFF by default)
+    this.legacyClampsEnabled = false,
+    this.legacyTargets = const [83.1, 92.3, 103.5, 120.0],
+    this.legacyClampRadius = 0.45,
+    this.legacyPromote60To120 = true,
+  })  : _hann = List<double>.generate(
+    frameSize,
+        (int n) => frameSize <= 1
+        ? 1.0
+        : (0.5 - 0.5 * math.cos(2 * math.pi * n / (frameSize - 1))),
+  ),
+        _prevMag = List<double>.filled(frameSize ~/ 2 + 1, 0.0),
+        _smoothMag = List<double>.filled(frameSize ~/ 2 + 1, 1e-6) {
+    if (sampleRate <= 0) throw ArgumentError('sampleRate must be positive');
+    if (frameSize <= 0 || (frameSize & (frameSize - 1)) != 0) {
+      throw ArgumentError('frameSize must be a positive power of 2');
+    }
+    if (minBpm >= maxBpm) throw ArgumentError('minBpm < maxBpm required');
+    _framesPerWindow = math.max(
+      32, (windowSeconds * sampleRate / frameSize).round(),
+    );
+  }
+
+  void reset() {
+    _frame.clear();
+    _onsetCurve.clear();
+    _onsetHist.clear();
+    _bpmHist.clear();
+    _prevMag.fillRange(0, _prevMag.length, 0.0);
+    _smoothMag.fillRange(0, _smoothMag.length, 1e-6);
+    _octaveHistory.clear();
+    _recentCandidates.clear();
+
+    _h1Bpm = 0.0; _h1Score = 0.0;
+    _h2Bpm = 0.0; _h2Score = 0.0;
+    _h3Bpm = 0.0; _h3Score = 0.0;
+    _switchHold = 0;
+
+    _emaBpm = 0.0; _reportedBpm = 0.0;
+    _envelopesWritten = 0;
+    _lastAcfTop = <Map<String, double>>[];
+
+    _last = const BpmEstimate(0.0, 0.0, false, 0.0);
+    _lastFrameRms = 0.0; _energyDb = -120.0;
+    _formatGuess = 'pcm16';
+    _lastAcceptedLag = -1.0;
+    _lockGoodFrames = 0; _lockBadFrames = 0;
+    _stickyTarget = null;
+    _displayFilter.reset(0.0);
+
+    if (useParticleFilter) _initializeParticles();
+  }
+
+  // ---------- Streaming input ----------
+  void addBytes(
+      Uint8List bytes, {
+        required int channels,
+        required bool isFloat32,
+      }) {
+    if (bytes.isEmpty || channels <= 0) return;
+
+    _formatGuess = isFloat32 ? 'float32' : 'pcm16';
+    final ByteData bd = ByteData.sublistView(bytes);
+    double frameEnergy = 0.0;
+    int processedSamples = 0;
+
+    if (isFloat32) {
+      final int count = bytes.length ~/ 4;
+      for (int i = 0; i < count; i += channels) {
+        double s = 0.0;
+        for (int ch = 0; ch < channels; ch++) {
+          final int idx = 4 * (i + ch);
+          if (idx + 3 < bytes.length) s += bd.getFloat32(idx, Endian.little);
+        }
+        s /= channels;
+        if (s.isFinite) {
+          frameEnergy += s * s;
+          processedSamples++;
+          _pushSample(s);
+        }
+      }
+    } else {
+      final int count = bytes.length ~/ 2;
+      for (int i = 0; i < count; i += channels) {
+        double s = 0.0;
+        for (int ch = 0; ch < channels; ch++) {
+          final int idx = 2 * (i + ch);
+          if (idx + 1 < bytes.length) s += bd.getInt16(idx, Endian.little) / 32768.0;
+        }
+        s /= channels;
+        if (s.isFinite) {
+          frameEnergy += s * s;
+          processedSamples++;
+          _pushSample(s);
+        }
+      }
+    }
+
+    if (processedSamples > 0) {
+      _lastFrameRms = math.sqrt(frameEnergy / processedSamples);
+      _energyDb = _lastFrameRms > 0 ? 20 * math.log(_lastFrameRms) / math.ln10 : -120.0;
+    }
+  }
+
+  void _pushSample(double s) {
+    _frame.add(s);
+    if (_frame.length >= frameSize) {
+      _processFrame();
+      _frame.clear();
+    }
+  }
+
+  void _processFrame() {
+    if (_frame.isEmpty) return;
+
+    final List<double> win = List<double>.filled(frameSize, 0.0);
+    for (int i = 0; i < frameSize; i++) {
+      final double x = (i < _frame.length) ? _frame[i] : 0.0;
+      win[i] = x * _hann[i];
+    }
+
+    double onset = 0.0;
+    if (useSpectralFlux) {
+      final _FftResult f = _fft(win);
+      final int half = frameSize ~/ 2;
+
+      const double alpha = 0.95; // whitening smoother
+      for (int k = 1; k <= half; k++) {
+        final double mag = math.sqrt(f.real[k]*f.real[k] + f.imag[k]*f.imag[k]);
+        // Whitening (optional)
+        if (enableWhitening) {
+          _smoothMag[k] = alpha * _smoothMag[k] + (1 - alpha) * mag;
+          final double whiten = (mag / (_smoothMag[k] + 1e-9)) - 1.0;
+          final double diff = whiten > 0 ? whiten : 0.0;
+          onset += diff * _onsetWeight(k * sampleRate / frameSize);
+        } else {
+          double diff = mag - _prevMag[k];
+          if (diff < 0) diff = 0.0;
+          onset += diff * _onsetWeight(k * sampleRate / frameSize);
+        }
+        _prevMag[k] = mag;
+      }
+      onset /= (half > 0 ? half.toDouble() : 1.0);
+    } else {
+      double acc = 0.0;
+      for (int i = 0; i < frameSize; i++) {
+        final double v = win[i];
+        acc += v * v;
+      }
+      onset = math.sqrt(acc / frameSize);
+    }
+
+    _onsetHist.add(onset);
+    if (_onsetHist.length > 120) _onsetHist.removeAt(0);
+
+    double thr = 0.0;
+    if (_onsetHist.length >= medianFilterSize) {
+      final List<double> tmp = List<double>.from(_onsetHist)..sort();
+      final double median = tmp[tmp.length ~/ 2];
+      thr = median * adaptiveThresholdRatio;
+    }
+    final double post = math.max(0.0, onset - thr) * onsetSensitivity;
+
+    _onsetCurve.add(post);
+    _envelopesWritten++;
+    while (_onsetCurve.length > _framesPerWindow) _onsetCurve.removeAt(0);
+
+    if (_energyDb < minEnergyDb) return;
+    if (_onsetCurve.length < 48) return;
+
+    _estimateTempo();
+  }
+
+  // Perceptual + harmonic onset weights
+  double _onsetWeight(double freq) {
+    double w = 1.0;
+    if (freq >= 150 && freq < 400) w = 1.8;       // snare fundamental
+    else if (freq >= 400 && freq < 1200) w = 1.5; // snare harmonics
+    else if (freq >= 60 && freq < 150) w = 1.2;   // kick
+    else if (freq >= 1200) w = 0.8;               // reduce cymbal noise
+
+    if (_h1Bpm > 0) {
+      final double beatHz = _h1Bpm / 60.0;
+      if (beatHz > 0) {
+        final double r = freq / beatHz;
+        final int h = r.round();
+        final double err = (r - h).abs();
+        if (err < 0.15 && h >= 1 && h <= 8) w *= 1.3;
+      }
+    }
+    return w;
+  }
+
+  void _estimateTempo() {
+    final int n = _onsetCurve.length;
+    if (n < 48) return;
+
+    final int minLag = math.max(2, (60.0 * sampleRate / (frameSize * maxBpm)).round());
+    final int maxLag = math.min(n - 3, (60.0 * sampleRate / (frameSize * minBpm)).round());
+    if (minLag >= maxLag) return;
+
+    // ACF + exponential temporal weighting
+    final Map<int, double> acf = <int, double>{};
+    _lastAcfTop = <Map<String, double>>[];
+    for (int lag = minLag; lag <= maxLag; lag++) {
+      acf[lag] = _acfNormWeighted(_onsetCurve, lag, lambda: 0.98);
+    }
+
+    // Light comb enhancement for harmonic lags
+    final Map<int, double> enhanced = <int, double>{};
+    acf.forEach((lag, score) {
+      double boost = score;
+      final int lag2 = lag * 2, lag3 = lag * 3;
+      if (acf.containsKey(lag2) && (acf[lag2]! > 0.3)) boost += 0.12;
+      if (acf.containsKey(lag3) && (acf[lag3]! > 0.2)) boost += 0.08;
+      enhanced[lag] = boost;
+    });
+
+    final List<MapEntry<int, double>> sorted = enhanced.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    if (sorted.isEmpty) return;
+
+    // Build candidates (still used by octave rescue + diagnostics)
+    final List<double> candidates = <double>[];
+    final List<double> candScores = <double>[];
+    final List<double> candLags = <double>[];
+    final int keep = math.min(12, sorted.length);
+
+    for (int i = 0; i < keep; i++) {
+      final int lag = sorted[i].key;
+      final double refined = _refinePeak(enhanced, lag, minLag, maxLag);
+      final double bpm = 60.0 / (refined * frameSize / sampleRate);
+
+      // Neighborhood support at octave-related lags
+      double support = 0.0;
+      for (final double r in const [0.5, 1.5, 2.0, 3.0, 4.0]) {
+        final int h = (refined * r).round();
+        if (h >= minLag && h <= maxLag) {
+          final double v = enhanced[h] ?? 0.0;
+          double weight = 0.3;
+          if (r == 2.0) weight = 0.7;
+          if (r == 0.5) weight = 0.5;
+          support += v * weight;
+        }
+      }
+
+      // Lag continuity prior
+      double lagPrior = 0.0;
+      if (_lastAcceptedLag > 0) {
+        final double ratio = refined / _lastAcceptedLag;
+        final double distPct = (ratio - 1.0).abs();
+        final double baseGain = (1.0 - (distPct / 0.06)).clamp(0.0, 1.0);
+        final double confScale = (1.0 - _last.confidence * 0.6).clamp(0.4, 1.0);
+        lagPrior = lagPriorStrength * baseGain * confScale;
+      }
+
+      final double totalScore = sorted[i].value * 1.5 + support + lagPrior;
+
+      _lastAcfTop.add({'lag': refined, 'bpm': bpm, 'score': totalScore});
+      candidates.add(bpm);
+      candScores.add(totalScore);
+      candLags.add(refined);
+    }
+
+    // Keep recent raw candidates for multi-frame octave support
+    _recentCandidates.add(candidates.sublist(0, math.min(8, candidates.length)));
+    if (_recentCandidates.length > 5) _recentCandidates.removeAt(0);
+
+    // ---------------- Selection path ----------------
+    double selected;
+    double conf;
+
+    if (useParticleFilter) {
+      // Particle update & selection
+      _updateParticles(enhanced, minLag, maxLag);
+      final double bestLag = _getBestLag();
+      selected = (bestLag > 0) ? _lagToBpm(bestLag)
+          : (candidates.isNotEmpty ? candidates.first : 0.0);
+      conf = _getParticleConfidence();
+    } else {
+      // Classic 3-hypothesis path
+      _h1Score *= hypothesisDecay;
+      _h2Score *= hypothesisDecay;
+      _h3Score *= hypothesisDecay;
+
+      for (int i = 0; i < candidates.length; i++) {
+        final double bpm = candidates[i];
+        final double score = candScores[i];
+        bool matched = false;
+        if (_sameFamily(bpm, _h1Bpm)) {
+          _h1Bpm = _blendTempo(_h1Bpm, _h1Score, bpm, score);
+          _h1Score += score * 0.6; matched = true;
+        } else if (_sameFamily(bpm, _h2Bpm)) {
+          _h2Bpm = _blendTempo(_h2Bpm, _h2Score, bpm, score);
+          _h2Score += score * 0.6; matched = true;
+        } else if (_sameFamily(bpm, _h3Bpm)) {
+          _h3Bpm = _blendTempo(_h3Bpm, _h3Score, bpm, score);
+          _h3Score += score * 0.6; matched = true;
+        }
+
+        if (!matched) {
+          if (_h3Score <= _h2Score && _h3Score <= _h1Score) { _h3Bpm = bpm; _h3Score = score; }
+          else if (_h2Score <= _h1Score) { _h2Bpm = bpm; _h2Score = score; }
+          else { _h1Bpm = bpm; _h1Score = score; }
+        }
+      }
+      if (_h2Score > _h1Score) { final tb=_h1Bpm, ts=_h1Score; _h1Bpm=_h2Bpm; _h1Score=_h2Score; _h2Bpm=tb; _h2Score=ts; }
+      if (_h3Score > _h2Score) { final tb=_h2Bpm, ts=_h2Score; _h2Bpm=_h3Bpm; _h2Score=_h3Score; _h3Bpm=tb; _h3Score=ts; }
+
+      if (_h2Score > _h1Score * switchThreshold) {
+        _switchHold++;
+        if (_switchHold >= switchHoldFrames) {
+          final tb=_h1Bpm, ts=_h1Score;
+          _h1Bpm=_h2Bpm; _h1Score=_h2Score; _h2Bpm=tb; _h2Score=ts;
+          _switchHold = 0;
+        }
+      } else {
+        if (_switchHold > 0) _switchHold--;
+      }
+
+      selected = (_h1Bpm > 0.0) ? _h1Bpm
+          : (candidates.isNotEmpty ? candidates.first : 0.0);
+      final double total = math.max(1e-9, _h1Score + _h2Score + _h3Score);
+      conf = math.max(0.0, math.min(1.0, _h1Score / total));
+    }
+
+    // Octave disambiguation (ratio-based, multi-frame support)
+    selected = _octaveRescueRatio(selected, conf);
+
+    // Confidence-aware repel from half/double vicinity (generic)
+    selected = _antiSnapGeneric(selected, conf);
+
+    // Update lag prior anchor after octave & snap
+    if (selected > 0) _lastAcceptedLag = _bpmToLag(selected);
+
+    // Adaptive EMA (quicker inside capture band)
+    if (_emaBpm == 0.0) {
+      _emaBpm = selected;
+    } else {
+      final double diff = (selected - _emaBpm).abs();
+      final double capRad = _lagFracToBpmRadius(
+        (selected > 0 ? selected : (_emaBpm > 0 ? _emaBpm : 100.0)),
+        captureFracStrong,
+      );
+      double alpha = (diff <= capRad) ? math.max(emaAlpha, 0.18) : emaAlpha;
+      if (diff > 6.0) alpha = (emaAlpha * 1.8).clamp(emaAlpha, 0.24).toDouble();
+      _emaBpm = _emaBpm * (1 - alpha) + selected * alpha;
+    }
+
+    // Stability (MAD-based) + tempo-change detector
+    _bpmHist.add(_emaBpm);
+    while (_bpmHist.length > historyLength) _bpmHist.removeAt(0);
+    final double stab = _stabilityMAD(_bpmHist);
+    final double tempoChange = _detectTempoChange(_bpmHist);
+    if (tempoChange > 0.02) { // >2% change detected
+      _lockGoodFrames = math.max(0, _lockGoodFrames - 2);
+    }
+
+    // Lock/unlock in BEATS (dynamic frame counters) + floor clamps
+    final double refBpm = (_emaBpm > 0) ? _emaBpm : (selected > 0 ? selected : 100.0);
+    int dynLockFrames   = math.max(8,  (_bpmToLag(refBpm) * beatsToLock  ).round());
+    int dynUnlockFrames = math.max(4,  (_bpmToLag(refBpm) * beatsToUnlock).round());
+
+    bool isLockedNow = _last.isLocked;
+    if (stab >= lockStabilityHi && conf >= 0.60) {
+      _lockGoodFrames++; _lockBadFrames = 0;
+      if (_lockGoodFrames >= dynLockFrames) isLockedNow = true;
+    } else if (stab <= lockStabilityLo) {
+      _lockBadFrames++; _lockGoodFrames = 0;
+      if (_lockBadFrames >= dynUnlockFrames) isLockedNow = false;
+    } else {
+      if (_lockGoodFrames > 0) _lockGoodFrames--;
+      if (_lockBadFrames  > 0) _lockBadFrames--;
+    }
+
+    // Sticky (loop-safe)
+    double outInternal = _applyStickyUniversal(_emaBpm, conf, isLockedNow);
+
+    // ---------- OPTIONAL LEGACY SAFETY NETS ----------
+    if (legacyClampsEnabled) {
+      for (final t in legacyTargets) {
+        if ((outInternal - t).abs() <= legacyClampRadius) {
+          outInternal = t; _stickyTarget = t; _reportedBpm = outInternal;
+          _emit(outInternal, stab, isLockedNow, conf);
+          return;
+        }
+      }
+      if (legacyPromote60To120 && outInternal >= 57.0 && outInternal <= 63.0) {
+        final bool has120InAcf = _lastAcfTop.any((m) {
+          final cb = (m['bpm'] ?? 0.0);
+          return (cb >= 115.0 && cb <= 125.0);
+        });
+        final bool history120 = (_octaveHistory.length >= 4)
+            ? (() { final hmed = _computeMedian(_octaveHistory);
+        return (hmed >= 108.0 && hmed <= 132.0); })()
+            : false;
+        if (has120InAcf || history120 || _last.isLocked || conf >= 0.35) {
+          outInternal = 120.0; _stickyTarget = 120.0; _reportedBpm = outInternal;
+          _emit(outInternal, stab, isLockedNow, conf);
+          return;
+        }
+      }
+    }
+    // -----------------------------------------------
+
+    // ---- Display smoothing (Kalman) & reporting quantization ----
+    final double processNoise = isLockedNow ? 0.01 : 0.05;
+    final double measurementNoise = (1.0 - conf) * 2.0;
+    final double smoothOut = _displayFilter.update(outInternal, processNoise, measurementNoise);
+
+    // Deadband against last reported, normalized by beat fraction
+    final double dead = _lagFracToBpmRadius(outInternal, isLockedNow ? 0.06 : 0.08);
+    double out = smoothOut;
+    if (_reportedBpm > 0 && (out - _reportedBpm).abs() < dead) out = _reportedBpm;
+
+    final double q = isLockedNow ? reportQuantLocked : reportQuantUnlocked;
+    out = (out / q).round() * q;
+    _reportedBpm = out;
+
+    _emit(out, stab, isLockedNow, conf);
+  }
+
+  void _emit(double out, double stab, bool isLockedNow, double conf) {
+    _last = BpmEstimate(out, stab, isLockedNow, conf.clamp(0.0, 1.0));
+  }
+
+  // ===== Sticky (universal, loop-safe) =====
+  double _applyStickyUniversal(double bpm, double confidence, bool isLockedNow) {
+    if (_stickyTarget != null) {
+      final double holdRad = _lagFracToBpmRadius(
+        bpm,
+        isLockedNow ? holdFracLocked : holdFracUnlocked,
+      );
+      if ((bpm - _stickyTarget!).abs() <= holdRad) {
+        return _stickyTarget!;
+      } else {
+        _stickyTarget = null;
+      }
+    }
+
+    if (isLockedNow && confidence >= 0.75 && _bpmHist.length >= 12) {
+      final List<double> tail = _bpmHist.sublist(_bpmHist.length - 12);
+      final double mean = tail.reduce((a,b)=>a+b) / tail.length;
+      final double meanRad = _lagFracToBpmRadius(mean, 0.02); // tight
+      bool tight = true;
+      for (final v in tail) { if ((v - mean).abs() > meanRad) { tight = false; break; } }
+      if (tight && _stickyTarget == null) {
+        _stickyTarget = mean;
+        return mean;
+      }
+    }
+    return bpm;
+  }
+
+  // ===== Octave rescue with multi-frame support & safe history update =====
+  double _octaveRescueRatio(double bpm, double confidence) {
+    if (bpm <= 0) return bpm;
+
+    final double ref = (_octaveHistory.length >= 5)
+        ? _computeMedian(_octaveHistory)
+        : (_emaBpm > 0 ? _emaBpm : bpm);
+
+    if (!ref.isFinite || ref <= 0) return bpm;
+
+    final double r = bpm / ref;
+    final double tolStrong = rescueTolStrong;
+    final double tolWeak   = rescueTolWeak;
+
+    final List<({double mult, double target})> fam = [
+      (mult: 0.5,  target: bpm * 2.0),
+      (mult: 2.0,  target: bpm * 0.5),
+      (mult: 0.667,target: bpm * 1.5),
+      (mult: 1.5,  target: bpm * 0.667),
+    ];
+
+    double original = bpm;
+    for (final cand in fam) {
+      final double diff = (r - cand.mult).abs();
+      final double tol = (confidence >= 0.75) ? tolStrong : tolWeak;
+      if (diff <= tol) {
+        final double corrected = cand.target.clamp(minBpm, maxBpm);
+        int support = 0, frames = _recentCandidates.length;
+        for (final frameCands in _recentCandidates) {
+          if (_hasValueNear(frameCands, corrected, corrected * 0.05)) support++;
+        }
+        final double prior = _tempoPrior(corrected);
+        if (frames == 0 || (support >= (frames * 0.6) && prior > 0.3)) {
+          bpm = corrected;
+          break;
+        }
+      }
+    }
+
+    if (confidence >= 0.65 || (bpm - original).abs() < 0.1) {
+      _octaveHistory.add(bpm);
+      if (_octaveHistory.length > _octaveHistorySize) _octaveHistory.removeAt(0);
+    }
+
+    return bpm;
+  }
+
+  bool _hasValueNear(List<double> values, double target, double radius) {
+    for (final v in values) { if ((v - target).abs() <= radius) return true; }
+    return false;
+  }
+
+  double _tempoPrior(double bpm) {
+    const modes = [
+      (center: 75.0,  sigma: 8.0,  weight: 0.15),
+      (center: 90.0,  sigma: 10.0, weight: 0.20),
+      (center: 120.0, sigma: 15.0, weight: 0.30),
+      (center: 140.0, sigma: 12.0, weight: 0.20),
+      (center: 170.0, sigma: 10.0, weight: 0.15),
+    ];
+    double prob = 0.0;
+    for (final m in modes) {
+      final z = (bpm - m.center) / m.sigma;
+      prob += m.weight * math.exp(-0.5 * z * z);
+    }
+    return prob.clamp(0.0, 1.0);
+  }
+
+  // Confidence-aware repel from attractors around half/double
+  double _antiSnapGeneric(double bpm, double confidence) {
+    final double guardFrac = (confidence < 0.55)
+        ? repelFracLowConf * 1.5
+        : (confidence < 0.7) ? repelFracLowConf
+        : repelFracHiConf;
+
+    final double guard = _lagFracToBpmRadius(bpm, guardFrac);
+
+    final List<double> attractors = [
+      60.0, 83.1, 86.0, 92.3, 100.0, 103.5, 120.0
+    ];
+
+    if (_stickyTarget != null) {
+      attractors.removeWhere((a) => (a - _stickyTarget!).abs() <= guard);
+    }
+
+    for (final a in attractors) {
+      if ((bpm - a).abs() < guard) {
+        final double delta = (bpm >= a) ? guard : -guard;
+        return (bpm + delta).clamp(minBpm, maxBpm);
+      }
+    }
+    return bpm;
+  }
+
+  // ===== Stability: MAD-based with spike cap =====
+  double _stabilityMAD(List<double> series) {
+    if (series.length < 6) return 0.0;
+    final int use = math.min(16, series.length);
+    final List<double> tail = series.sublist(series.length - use);
+
+    final double median = _computeMedian(tail);
+    if (!median.isFinite || median <= 0) return 0.0;
+
+    final deviations = tail.map((v) => (v - median).abs()).toList()..sort();
+    final double mad = _computeMedian(deviations) / 0.6745; // normalized
+    final double nmad = (mad / median).abs();
+
+    double stab = math.exp(-nmad * 25.0);
+
+    if (series.length >= 8) {
+      final recent4 = series.sublist(series.length - 4);
+      final double m4 = recent4.reduce((a,b)=>a+b) / 4.0;
+      double v4 = 0.0; for (final v in recent4) { final d=v-m4; v4 += d*d; } v4 /= 4.0;
+      if (v4 > mad * mad * 4.0) stab = math.min(stab, 0.45);
+    }
+    return stab.clamp(0.0, 1.0);
+  }
+
+  double _detectTempoChange(List<double> series) {
+    if (series.length < 8) return 0.0;
+    final tail = series.sublist(series.length - 8);
+    double maxDiff = 0.0;
+    for (int i = 1; i < tail.length; i++) {
+      maxDiff = math.max(maxDiff, (tail[i] - tail[i - 1]).abs());
+    }
+    final double median = _computeMedian(tail);
+    return median > 0 ? maxDiff / median : 0.0;
+  }
+
+  // ===== Utilities =====
+  double _framesPerSecond() => sampleRate / frameSize;
+  double _bpmToLag(double bpm) => (60.0 / bpm) * _framesPerSecond(); // frames/beat
+  double _lagToBpm(double lag) => 60.0 / (lag / _framesPerSecond());
+
+  double _lagFracToBpmRadius(double bpm, double frac) {
+    final double lag = _bpmToLag(bpm);
+    final double lo = _lagToBpm(lag * (1.0 + frac));
+    final double hi = _lagToBpm(lag * (1.0 - frac));
+    return ((hi - bpm).abs() + (bpm - lo).abs()) * 0.5;
+  }
+
+  double _computeMedian(List<double> values) {
+    if (values.isEmpty) return 0.0;
+    final sorted = List<double>.from(values)..sort();
+    final mid = sorted.length ~/ 2;
+    return sorted.length.isOdd ? sorted[mid]
+        : (sorted[mid - 1] + sorted[mid]) / 2.0;
+  }
+
+  _FftResult _fft(List<double> input) {
+    final int n = input.length;
+    final List<double> real = List<double>.from(input);
+    final List<double> imag = List<double>.filled(n, 0.0);
+
+    int j = 0;
+    for (int i = 1; i < n; i++) {
+      int bit = n >> 1;
+      while ((j & bit) != 0) { j &= ~bit; bit >>= 1; }
+      j |= bit;
+      if (i < j) {
+        final double tr = real[i]; real[i] = real[j]; real[j] = tr;
+        final double ti = imag[i]; imag[i] = imag[j]; imag[j] = ti;
+      }
+    }
+
+    for (int len = 2; len <= n; len <<= 1) {
+      final double ang = -2 * math.pi / len;
+      final double wlenR = math.cos(ang);
+      final double wlenI = math.sin(ang);
+      for (int i = 0; i < n; i += len) {
+        double wR = 1.0, wI = 0.0;
+        for (int k = 0; k < len ~/ 2; k++) {
+          final int u = i + k;
+          final int v = i + k + len ~/ 2;
+          final double tR = real[v] * wR - imag[v] * wI;
+          final double tI = real[v] * wI + imag[v] * wR;
+          real[v] = real[u] - tR; imag[v] = imag[u] - tI;
+          real[u] += tR; imag[u] += tI;
+          final double nWR = wR * wlenR - wI * wlenI;
+          final double nWI = wR * wlenI + wI * wlenR;
+          wR = nWR; wI = nWI;
+        }
+      }
+    }
+    return _FftResult(real, imag);
+  }
+
+  // Exponential temporal weighting ACF
+  double _acfNormWeighted(List<double> x, int lag, {double lambda = 0.98}) {
+    if (lag <= 0 || lag >= x.length) return 0.0;
+    double s = 0.0, n1 = 0.0, n2 = 0.0;
+    final int m = x.length - lag;
+    for (int i = 0; i < m; i++) {
+      final double w = math.pow(lambda, (m - i - 1)).toDouble();
+      final double a = x[i] * w;
+      final double b = x[i + lag] * w;
+      s += a * b; n1 += a * a; n2 += b * b;
+    }
+    final double denom = math.sqrt(math.max(1e-12, n1 * n2));
+    return (denom > 0.0) ? (s / denom) : 0.0;
+  }
+
+  // Improved local refinement: weighted centroid over 5 points (robust)
+  double _refinePeak(Map<int, double> acf, int lag, int minLag, int maxLag) {
+    final Map<int,double> pts = {};
+    for (int i = -2; i <= 2; i++) {
+      final k = lag + i;
+      if (k >= minLag && k <= maxLag && acf.containsKey(k)) {
+        final v = acf[k]!;
+        if (v.isFinite && v > 0) pts[k] = v;
+      }
+    }
+    if (pts.length < 3) return lag.toDouble();
+    double ws = 0.0, w = 0.0;
+    pts.forEach((k,v){ ws += k * v; w += v; });
+    if (w <= 0) return lag.toDouble();
+    final double est = ws / w;
+    return est.clamp(minLag.toDouble(), maxLag.toDouble());
+  }
+
+  bool _sameFamily(double a, double b) {
+    if (!(a > 0.0 && b > 0.0)) return false;
+    final double r = (a > b) ? (a / b) : (b / a);
+    return (r > 0.98 && r < 1.02) || (r > 1.95 && r < 2.05) || (r > 2.90 && r < 3.10);
+  }
+
+  double _blendTempo(double base, double baseScore, double add, double addScore) {
+    final double w1 = math.max(1e-9, baseScore);
+    final double w2 = math.max(1e-9, addScore);
+    return (base * w1 + add * w2) / (w1 + w2);
+  }
+
+  // ---------------- Particle filter helpers ----------------
+
+  void _initializeParticles() {
+    _particles.clear();
+    final double minLag = _bpmToLag(maxBpm);
+    final double maxLag = _bpmToLag(minBpm);
+    for (int i = 0; i < 12; i++) {
+      final lag = minLag + (maxLag - minLag) * i / 11.0;
+      _particles.add(_Particle(lag, 1.0 / 12.0));
+    }
+  }
+
+  void _updateParticles(Map<int, double> acf, int minLag, int maxLag) {
+    // 1) Predict: add velocity (for tempo changes)
+    for (final p in _particles) {
+      p.lag += p.velocity;
+      if (p.lag < minLag) p.lag = minLag.toDouble();
+      if (p.lag > maxLag) p.lag = maxLag.toDouble();
+    }
+
+    // 2) Update weights based on ACF likelihood (with octave support)
+    double totalWeight = 0.0;
+    for (final p in _particles) {
+      final int nearestLag = p.lag.round();
+      final double acfScore = acf[nearestLag] ?? 0.0;
+
+      final int halfLag = (p.lag / 2.0).round();
+      final int doubleLag = (p.lag * 2.0).round();
+      final double octaveBonus =
+          (acf[halfLag] ?? 0.0) * 0.3 + (acf[doubleLag] ?? 0.0) * 0.3;
+
+      p.weight *= (0.95 + acfScore * 5.0 + octaveBonus);  // Likelihood-ish
+      totalWeight += p.weight;
+    }
+
+    // 3) Normalize
+    if (totalWeight > 0) {
+      for (final p in _particles) p.weight /= totalWeight;
+    } else {
+      // Degenerate — reinit uniformly
+      _initializeParticles();
+    }
+
+    // 4) Resample if weights degenerate (effective sample size low)
+    _lastEss = 1.0 / _particles.fold(0.0, (sum, p) => sum + p.weight * p.weight);
+    if (_lastEss < 4.0) {
+      _resampleParticles(minLag, maxLag);
+    }
+  }
+
+  void _resampleParticles(int minLag, int maxLag) {
+    final newParticles = <_Particle>[];
+    final cdf = <double>[];
+    double cumulative = 0.0;
+    for (final p in _particles) {
+      cumulative += p.weight;
+      cdf.add(cumulative);
+    }
+
+    final rng = math.Random();
+    for (int i = 0; i < 12; i++) {
+      final u = rng.nextDouble();
+      int idx = 0;
+      for (; idx < cdf.length; idx++) {
+        if (cdf[idx] >= u) break;
+      }
+      final original = _particles[(idx < _particles.length) ? idx : _particles.length - 1];
+
+      // ±1 frame jitter
+      final jitter = (rng.nextDouble() - 0.5) * 2.0;
+      double lag = (original.lag + jitter);
+      if (lag < minLag) lag = minLag.toDouble();
+      if (lag > maxLag) lag = maxLag.toDouble();
+      newParticles.add(_Particle(lag, 1.0 / 12.0, original.velocity * 0.9));
+    }
+
+    _particles
+      ..clear()
+      ..addAll(newParticles);
+  }
+
+  double _getBestLag() {
+    double sumLagWeight = 0.0, sumWeight = 0.0;
+    for (final p in _particles) {
+      sumLagWeight += p.lag * p.weight;
+      sumWeight += p.weight;
+    }
+    return sumWeight > 0 ? sumLagWeight / sumWeight : 0.0;
+  }
+
+  double _getParticleConfidence() {
+    // Entropy-based: lower entropy = higher confidence
+    double entropy = 0.0;
+    for (final p in _particles) {
+      if (p.weight > 1e-12) {
+        entropy -= p.weight * math.log(p.weight) / math.ln2;
+      }
+    }
+    // Normalize: max entropy = log2(12) ≈ 3.58
+    final double norm = (entropy / 3.58).clamp(0.0, 1.0);
+    return (1.0 - norm);
+  }
+}

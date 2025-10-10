@@ -54,7 +54,8 @@ class _BpmTestPageState extends State<BpmTestPage> {
 
     if (bytes.isNotEmpty) {
       if (bytes.lengthInBytes % 2 == 0) {
-        final i16 = bytes.buffer.asInt16List(bytes.offsetInBytes, bytes.lengthInBytes ~/ 2);
+        final i16 = bytes.buffer
+            .asInt16List(bytes.offsetInBytes, bytes.lengthInBytes ~/ 2);
         double sum = 0.0;
         for (int i = 0; i < i16.length; i++) {
           final s = i16[i] / 32768.0;
@@ -69,7 +70,8 @@ class _BpmTestPageState extends State<BpmTestPage> {
       }
 
       if (useFloat) {
-        final f32 = bytes.buffer.asFloat32List(bytes.offsetInBytes, bytes.lengthInBytes ~/ 4);
+        final f32 = bytes.buffer
+            .asFloat32List(bytes.offsetInBytes, bytes.lengthInBytes ~/ 4);
         double sum = 0.0;
         for (int i = 0; i < f32.length; i++) {
           final s = f32[i];
@@ -108,7 +110,9 @@ class _BpmTestPageState extends State<BpmTestPage> {
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            ElevatedButton(onPressed: _on ? _stop : _start, child: Text(_on ? 'Stop' : 'Start')),
+            ElevatedButton(
+                onPressed: _on ? _stop : _start,
+                child: Text(_on ? 'Stop' : 'Start')),
             const SizedBox(height: 16),
             LinearProgressIndicator(value: level),
             const SizedBox(height: 12),

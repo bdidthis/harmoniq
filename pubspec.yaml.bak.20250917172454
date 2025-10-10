@@ -1,0 +1,29 @@
+# Add this to your existing pubspec.yaml file under the flutter section
+
+flutter:
+  uses-material-design: true
+  assets:
+  assets:
+    # Genre-specific key detection models
+    - assets/models/key_default.tflite
+    - assets/models/key_electronic.tflite
+    - assets/models/key_house.tflite
+    - assets/models/key_techno.tflite
+    - assets/models/key_trap.tflite
+    - assets/models/key_rock.tflite
+    - assets/models/key_jazz.tflite
+    - assets/models/key_bebop.tflite
+    - assets/models/key_classical.tflite
+    - assets/models/key_hiphop.tflite
+    - assets/models/key_rnb.tflite
+    - assets/models/key_pop.tflite
+    - assets/models/key_country.tflite
+    - assets/models/key_latin.tflite
+    - assets/models/key_world.tflite
+    
+    # Optional genre configuration
+    - assets/config/genre_models.json
+
+  # Add this dependency if not already present
+dependencies:
+  intl: ^0.18.1  # For date formatting in logger

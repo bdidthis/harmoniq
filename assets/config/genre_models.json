@@ -1,0 +1,51 @@
+{
+  "version": "1.0",
+  "models": {
+    "default": {
+      "modelPath": "assets/models/key_default.tflite",
+      "whiteningAlpha": 0.6,
+      "bassSuppression": 120.0,
+      "hpcpBins": 36,
+      "smoothingType": "ema",
+      "smoothingStrength": 0.55,
+      "supportsTuningRegression": false,
+      "minConfidence": 0.08,
+      "lockFrames": 4
+    },
+    "hiphop": {
+      "none": {
+        "modelPath": "assets/models/key_hiphop.tflite",
+        "whiteningAlpha": 0.8,
+        "bassSuppression": 180.0,
+        "hpcpBins": 36,
+        "smoothingType": "hmm",
+        "smoothingStrength": 0.6,
+        "supportsTuningRegression": false,
+        "minConfidence": 0.1,
+        "lockFrames": 4
+      },
+      "trap": {
+        "modelPath": "assets/models/key_hiphop_trap.tflite",
+        "whiteningAlpha": 0.96,
+        "bassSuppression": 240.0,
+        "hpcpBins": 48,
+        "smoothingType": "hmm",
+        "smoothingStrength": 0.85,
+        "supportsTuningRegression": false,
+        "minConfidence": 0.08,
+        "lockFrames": 5
+      },
+      "default": {
+        "modelPath": "assets/models/key_hiphop.tflite",
+        "whiteningAlpha": 0.94,
+        "bassSuppression": 220.0,
+        "hpcpBins": 36,
+        "smoothingType": "hmm",
+        "smoothingStrength": 0.7,
+        "supportsTuningRegression": true,
+        "minConfidence": 0.1,
+        "lockFrames": 4
+      }
+    }
+  }
+}

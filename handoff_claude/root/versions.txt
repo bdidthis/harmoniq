@@ -1,0 +1,111 @@
+=== tool versions ===
+Flutter 3.35.4 • channel stable • https://github.com/flutter/flutter
+Framework • revision d693b4b9db (10 days ago) • 2025-09-16 14:27:41 +0000
+Engine • hash feee8ee8fb8b975dd9990f86d3bda11e6e75faf3 (revision c298091351) (11 days ago) • 2025-09-15 14:04:24.000Z
+Tools • Dart 3.9.2 • DevTools 2.48.0
+Dart SDK version: 3.9.2 (stable) (Wed Aug 27 03:49:40 2025 -0700) on "macos_arm64"
+1.16.2
+openjdk version "17.0.16" 2025-07-15
+OpenJDK Runtime Environment Temurin-17.0.16+8 (build 17.0.16+8)
+OpenJDK 64-Bit Server VM Temurin-17.0.16+8 (build 17.0.16+8, mixed mode, sharing)
+
+=== gradle-wrapper.properties ===
+5:distributionUrl=https://services.gradle.org/distributions/gradle-8.7-all.zip
+
+=== android/settings.gradle (head) ===
+pluginManagement {
+    repositories { google(); mavenCentral(); gradlePluginPortal() }
+    def p = new Properties()
+    def f = new File(rootDir, "local.properties")
+    if (f.exists()) f.withInputStream { p.load(it) }
+    def fs = p.getProperty("flutter.sdk")
+    if (fs == null) throw new GradleException("flutter.sdk not set in local.properties")
+    includeBuild("${fs}/packages/flutter_tools/gradle")
+}
+plugins {
+    id "dev.flutter.flutter-plugin-loader" version "1.0.0"
+    id "com.android.application" version "8.7.2" apply false
+    id "org.jetbrains.kotlin.android" version "2.1.0" apply false
+}
+include ":app"
+
+=== android/app/build.gradle (head) ===
+plugins {
+    id "com.android.application"
+    id "org.jetbrains.kotlin.android"
+    id "dev.flutter.flutter-gradle-plugin"
+}
+
+android {
+    namespace "com.example.harmoniq"
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.example.harmoniq"
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled false
+            shrinkResources false
+        }
+        release {
+            minifyEnabled false
+            shrinkResources false
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+    }
+}
+
+dependencies {
+    implementation platform("org.jetbrains.kotlin:kotlin-bom:2.1.0")
+}
+
+=== ios/Podfile (head) ===
+platform :ios, '13.0'
+ENV['COCOAPODS_DISABLE_STATS'] = 'true'
+
+project 'Runner', {
+  'Debug' => :debug,
+  'Profile' => :release,
+  'Release' => :release,
+}
+
+def flutter_root
+  generated_xcode_build_settings_path = File.expand_path(File.join('..', 'Flutter', 'Generated.xcconfig'))
+  unless File.exist?(generated_xcode_build_settings_path)
+    raise "Generated.xcconfig must exist. Run `flutter pub get`."
+  end
+  File.foreach(generated_xcode_build_settings_path) do |line|
+    matches = line.match(/FLUTTER_ROOT\=(.*)/)
+    return matches[1].strip if matches
+  end
+  raise "FLUTTER_ROOT not found in Generated.xcconfig"
+end
+
+require File.expand_path(File.join(flutter_root, 'packages', 'flutter_tools', 'bin', 'podhelper'))
+
+flutter_ios_podfile_setup
+
+target 'Runner' do
+  use_frameworks! :linkage => :static
+  use_modular_headers!
+  flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+end
+
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    flutter_additional_ios_build_settings(target)
+  end
+end
+
+=== local.properties ===
+sdk.dir=/Users/bdidthis/Library/Android/sdk
+flutter.sdk=/Users/bdidthis/dev/flutter
+flutter.buildMode=debug
+flutter.versionName=0.1.0
+flutter.versionCode=1
