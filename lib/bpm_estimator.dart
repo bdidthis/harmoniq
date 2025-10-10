@@ -1,18 +1,20 @@
 // lib/bpm_estimator.dart
-// HarmoniQ BPM Estimator — v6.12.0 "ACF LOCK TARGET"
+// HarmoniQ BPM Estimator — v6.12.5 "LOCK FREEZE + 4X UNLOCK"
 //
-// CHANGES FROM v6.11.9:
-// 🔄 FIXED: Wrong lock value (126.05 vs 128.9 ACF peak = -2.85 BPM error)
-// 🔄 CAUSE: Hypothesis value used at lock instead of top ACF peak
-// 🔄 FIX: At lock transition, select top ACF peak if strong (>60%) and close (±10 BPM)
+// CHANGES FROM v6.12.0:
+// 🔒 FIXED: Off-by-one frame bug - now calculates lock state EARLY and uses isLockedNow throughout
+// ❄️  FIXED: EMA freeze when locked - alpha=0.002 (99.8% hold) prevents drift
+// 🛡️ FIXED: 4x unlock threshold for BPM 95-180 - prevents premature unlock
+// 📊 FIXED: Lock state used for hypothesis blending and ACF trust decisions
 //
-// TEST RESULT (Calvin Harris 127.99 BPM):
-// - v6.11.9: Locked 126.05, drifted to 125.15 (error: -2.84 BPM)
-// - v6.12.0: Should lock at ~128-129 BPM using ACF peak
+// KEY IMPROVEMENTS:
+// - Lock state calculated BEFORE hypothesis updates (not after)
+// - All frame decisions use current lock state, not previous frame
+// - EMA essentially frozen when locked (0.2% update rate)
+// - Much harder to unlock when BPM is reasonable (95-180 range)
 //
-// PREVIOUS FIXES:
-// v6.11.9: Unlock protection (2x threshold), family prefers locked value
-// v6.11.8: ACF direct copy when locked+stable
+// TEST TARGET: Calvin Harris 127.99 BPM
+// EXPECTED: Lock at ~128-129 within 30s, hold <0.5 BPM error for 4+ minutes
 
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -468,7 +470,60 @@ class BpmEstimator {
     final List<double> unifiedCandidates = familyBpms.isNotEmpty ? familyBpms : candidates;
     final List<double> unifiedScores = familyScores.isNotEmpty ? familyScores : candScores;
 
-    final bool nearLock = _last.stability >= 0.75 || _last.isLocked;
+    // ====================================================================
+    // v6.12.5 FIX #1: CALCULATE LOCK STATE EARLY (before hypothesis updates)
+    // This fixes the off-by-one frame bug where we used _last.isLocked
+    // ====================================================================
+
+    // Calculate preliminary stability to determine current lock state
+    final double prelimStab = _bpmHist.isNotEmpty ? _stabilityMAD(_bpmHist) : 0.0;
+
+    // Calculate preliminary confidence
+    final double total = math.max(1e-9, _h1Score + _h2Score + _h3Score);
+    double prelimConf = _h1Score / total;
+
+    // Track stability for lock/unlock decisions
+    if (_lastStableBpm > 0 && _emaBpm > 0 && (_emaBpm - _lastStableBpm).abs() <= 3.0) {
+      _stableFrameCount++;
+    } else {
+      _stableFrameCount = 0;
+    }
+    if (_emaBpm > 0) _lastStableBpm = _emaBpm;
+
+    // Determine current lock state EARLY
+    final bool wasLocked = _last.isLocked;
+    bool isLockedNow = wasLocked; // Start with previous state
+
+    final double refBpm = _emaBpm > 0 ? _emaBpm : 100.0;
+    final int dynLockFrames = math.max(8, (_bpmToLag(refBpm) * beatsToLock).round());
+    final int dynUnlockFrames = math.max(4, (_bpmToLag(refBpm) * beatsToUnlock).round());
+
+    // Update lock counters based on current conditions
+    if (prelimStab >= lockStabilityHi && prelimConf >= 0.60) {
+      _lockGoodFrames++;
+      _lockBadFrames = 0;
+      if (_lockGoodFrames >= dynLockFrames &&
+          _stableFrameCount >= _minFramesBeforeLock &&
+          prelimStab >= 0.70) {
+        isLockedNow = true;
+      }
+    } else if (prelimStab <= lockStabilityLo) {
+      _lockBadFrames++;
+      _lockGoodFrames = 0;
+      // v6.12.5 FIX #3: 4X unlock threshold for reasonable BPM
+      final bool inGoodRange = _emaBpm >= 95 && _emaBpm <= 180;
+      final int unlockThreshold = inGoodRange ? (dynUnlockFrames * 4) : dynUnlockFrames;
+      if (_lockBadFrames >= unlockThreshold) isLockedNow = false;
+    } else {
+      if (_lockGoodFrames > 0) _lockGoodFrames--;
+      if (_lockBadFrames > 0) _lockBadFrames--;
+    }
+
+    // ====================================================================
+    // Now use isLockedNow (current frame) instead of _last.isLocked (old)
+    // ====================================================================
+
+    final bool nearLock = prelimStab >= 0.75 || isLockedNow;
     final double h1AcfSupport = _acfSupportNear(_h1Bpm, radius: 2.0);
     final bool h1StronglySupported = h1AcfSupport > 0.65;
     final bool inCorrectionWindow = _envelopesWritten < 400;
@@ -500,8 +555,8 @@ class BpmEstimator {
       final double score = unifiedScores[i];
       bool matched = false;
 
-      // When locked+stable, trust ACF peaks more to prevent drift
-      final bool trustAcf = _last.isLocked && _last.stability > 0.90;
+      // v6.12.5: Use CURRENT lock state, not previous frame
+      final bool trustAcf = isLockedNow && prelimStab > 0.90;
 
       if (_sameFamily(bpm, _h1Bpm)) {
         _h1Bpm = trustAcf ? bpm : _blendTempo(_h1Bpm, _h1Score, bpm, score);
@@ -540,7 +595,7 @@ class BpmEstimator {
     if (_h3Score > _h2Score) {
       final tb = _h2Bpm, ts = _h2Score;
       _h2Bpm = _h3Bpm;
-      _h2Score = _h3Score;  // v6.11.5 FIX: Was _h3Score = _h3Score
+      _h2Score = _h3Score;
       _h3Bpm = tb;
       _h3Score = ts;
     }
@@ -565,8 +620,9 @@ class BpmEstimator {
 
     double selected = (_h1Bpm > 0.0) ? _h1Bpm : (candidates.isNotEmpty ? candidates.first : 0.0);
 
-    final double total = math.max(1e-9, _h1Score + _h2Score + _h3Score);
-    double conf = _h1Score / total;
+    // Recalculate confidence with final hypothesis values
+    final double totalFinal = math.max(1e-9, _h1Score + _h2Score + _h3Score);
+    double conf = _h1Score / totalFinal;
     if (_h2Score > 0) {
       final double prominence = (_h1Score - _h2Score) / _h2Score;
       if (prominence > 2.0) conf = (conf * 1.15).clamp(0.0, 1.0);
@@ -581,7 +637,7 @@ class BpmEstimator {
         if (avgDev < 0.03) conf = (conf * 1.15).clamp(0.0, 1.0);
       }
     }
-    final strongCandidates = candScores.where((s) => s > total * 0.3).length;
+    final strongCandidates = candScores.where((s) => s > totalFinal * 0.3).length;
     if (strongCandidates > 4) conf = (conf * 0.85).clamp(0.0, 1.0);
 
     if (_last.bpm > 0 && selected > 0) {
@@ -617,15 +673,32 @@ class BpmEstimator {
       selected = _octaveRescue(selected, unifiedCandidates, conf);
     }
 
+    // ====================================================================
+    // v6.12.5 FIX #2: EMA FREEZE when locked (alpha=0.002, 99.8% hold)
+    // This prevents drift while locked
+    // ====================================================================
+
     if (_emaBpm == 0.0) {
       _emaBpm = selected;
     } else {
-      final double diff = (selected - _emaBpm).abs();
-      double alpha = emaAlpha;
-      if (diff > 6.0)
-        alpha = (emaAlpha * 1.8).clamp(emaAlpha, 0.30).toDouble();
-      else if (diff > 3.0)
-        alpha = (emaAlpha * 1.3).clamp(emaAlpha, 0.22).toDouble();
+      double alpha;
+
+      if (isLockedNow) {
+        // LOCKED: Freeze EMA - only 0.2% update rate
+        alpha = 0.002;
+        if (_envelopesWritten % 50 == 0) {
+          print('❄️  EMA FROZEN: alpha=0.002 (99.8% hold) • current: ${_emaBpm.toStringAsFixed(2)} • new: ${selected.toStringAsFixed(2)}');
+        }
+      } else {
+        // UNLOCKED: Normal adaptive EMA
+        final double diff = (selected - _emaBpm).abs();
+        alpha = emaAlpha;
+        if (diff > 6.0)
+          alpha = (emaAlpha * 1.8).clamp(emaAlpha, 0.30).toDouble();
+        else if (diff > 3.0)
+          alpha = (emaAlpha * 1.3).clamp(emaAlpha, 0.22).toDouble();
+      }
+
       _emaBpm = _emaBpm * (1 - alpha) + selected * alpha;
     }
 
@@ -638,51 +711,7 @@ class BpmEstimator {
       _lockGoodFrames = math.max(0, _lockGoodFrames - 2);
     }
 
-    if (_lastStableBpm > 0 && (_emaBpm - _lastStableBpm).abs() <= 3.0) {
-      _stableFrameCount++;
-    } else {
-      _stableFrameCount = 0;
-    }
-    _lastStableBpm = _emaBpm;
-
-    final double refBpm = _emaBpm > 0 ? _emaBpm : 100.0;
-    final int dynLockFrames = math.max(8, (_bpmToLag(refBpm) * beatsToLock).round());
-    final int dynUnlockFrames = math.max(4, (_bpmToLag(refBpm) * beatsToUnlock).round());
-
-    bool isLockedNow = _last.isLocked;
-    final bool wasLocked = _last.isLocked;
-
-    if (clampLocked) {
-      _lockGoodFrames++;
-      _lockBadFrames = 0;
-      if (_lockGoodFrames >= 12 &&
-          _stableFrameCount >= _minFramesBeforeLock &&
-          stab >= 0.70 &&
-          conf >= 0.60) {
-        isLockedNow = true;
-      }
-    } else if (stab >= lockStabilityHi && conf >= 0.60) {
-      _lockGoodFrames++;
-      _lockBadFrames = 0;
-      if (_lockGoodFrames >= dynLockFrames &&
-          _stableFrameCount >= _minFramesBeforeLock &&
-          stab >= 0.70) {
-        isLockedNow = true;
-      }
-    } else if (stab <= lockStabilityLo) {
-      _lockBadFrames++;
-      _lockGoodFrames = 0;
-      // Extra protection: if BPM is reasonable (95-180) and was stable, require more bad frames
-      final bool inGoodRange = _emaBpm >= 95 && _emaBpm <= 180;
-      final int unlockThreshold = inGoodRange ? (dynUnlockFrames * 2) : dynUnlockFrames;
-      if (_lockBadFrames >= unlockThreshold) isLockedNow = false;
-    } else {
-      if (_lockGoodFrames > 0) _lockGoodFrames--;
-      if (_lockBadFrames > 0) _lockBadFrames--;
-    }
-
-    // v6.11.7 FIX: Reset EMA on lock transition to prevent pollution from convergence phase
-    // v6.12.0 FIX: Use top ACF peak at lock for accuracy
+    // Lock transition handling
     if (isLockedNow && !wasLocked) {
       // Prefer top ACF peak if it's strong and close to current estimate
       double lockTarget = selected;
@@ -691,29 +720,22 @@ class BpmEstimator {
         final topBpm = topPeak['bpm'] ?? 0.0;
         final topScore = topPeak['score'] ?? 0.0;
 
-        // Use top ACF peak if it's strong enough and reasonable
-        if (topScore > 0.60 && topBpm >= minBpm && topBpm <= maxBpm) {
-          // Check if it's close to our current estimate (within 10 BPM)
-          final diff = (topBpm - selected).abs();
-          if (diff <= 10.0) {
-            lockTarget = topBpm;
-          }
+        // Use top ACF peak if it's strong enough (>80% confidence, ignore distance)
+        if (topScore > 0.80 && topBpm >= minBpm && topBpm <= maxBpm) {
+          lockTarget = topBpm;
+          print('🎯 LOCK: Using top ACF peak ${topBpm.toStringAsFixed(1)} BPM (score: ${(topScore * 100).toStringAsFixed(0)}%) instead of selected ${selected.toStringAsFixed(1)}');
         }
       }
 
-      print('🔒 LOCK TRANSITION: Resetting EMA from $_emaBpm to $lockTarget (was: $selected, ACF top: ${_lastAcfTop.isNotEmpty ? _lastAcfTop.first['bpm']?.toStringAsFixed(1) : 'none'}), clearing sticky target, resetting deadband $_reportedBpm → 0.0');
-      _emaBpm = lockTarget;  // Reset EMA to lock target
-      selected = lockTarget;  // Update selected to match
+      print('🔒 LOCK TRANSITION: Resetting EMA from $_emaBpm to $lockTarget, clearing sticky target, resetting deadband $_reportedBpm → 0.0');
+      _emaBpm = lockTarget;
+      selected = lockTarget;
       _stickyTarget = null;
       _stickyFrames = 0;
       _reportedBpm = 0.0;
     }
 
     double outInternal = _applyStickyTarget(_emaBpm, conf, isLockedNow, stab);
-
-    if (isLockedNow && !wasLocked && _emaBpm != outInternal) {
-      print('   → EMA adjusted from $_emaBpm to $outInternal after sticky clear');
-    }
 
     if (useKalmanFilter) {
       final double processNoise = isLockedNow ? 0.005 : 0.03;
@@ -1057,7 +1079,7 @@ class BpmEstimator {
         if (_last.isLocked && _last.bpm > 0) {
           final ratio = bpm / _last.bpm;
           if (ratio >= 0.98 && ratio <= 1.02) {
-            candidateEffective *= 3.0; // Strong boost for exact match
+            candidateEffective *= 3.0;
           }
         }
 
@@ -1084,7 +1106,6 @@ class BpmEstimator {
           }
         }
 
-        final effectiveDiff = (candidateEffective - bestRepEffective).abs();
         final scoreRatio = candidateEffective / (bestRepEffective + 1e-9);
 
         if (candidateEffective > bestRepEffective * 1.15) {
