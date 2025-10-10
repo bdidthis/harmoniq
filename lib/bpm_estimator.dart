@@ -36,13 +36,15 @@ class _FftResult {
 class _KalmanFilter {
   double _estimate = 0.0;
   double _errorCovariance = 1.0;
-  double update(double measurement, double processNoise, double measurementNoise) {
+  double update(
+      double measurement, double processNoise, double measurementNoise) {
     _errorCovariance += processNoise;
     final k = _errorCovariance / (_errorCovariance + measurementNoise);
     _estimate = _estimate + k * (measurement - _estimate);
     _errorCovariance = (1 - k) * _errorCovariance;
     return _estimate;
   }
+
   void reset(double value) {
     _estimate = value;
     _errorCovariance = 1.0;
@@ -56,33 +58,33 @@ class BpmEstimator {
   double get confidence => _last.confidence;
 
   Map<String, dynamic> get debugStats => <String, dynamic>{
-    'env_len': _onsetCurve.length,
-    'energy_db': _energyDb,
-    'written_frames': _envelopesWritten,
-    'window_frames': _framesPerWindow,
-    'last_frame_rms': _lastFrameRms,
-    'format_guess': _formatGuess,
-    'hypotheses': {
-      'h1_bpm': _h1Bpm,
-      'h1_score': _h1Score,
-      'h2_bpm': _h2Bpm,
-      'h2_score': _h2Score,
-      'h3_bpm': _h3Bpm,
-      'h3_score': _h3Score,
-    },
-    'last_acf_top': _lastAcfTop,
-    'octave_history': _octaveHistory,
-    'recent_candidates': _recentCandidates.length,
-    'sticky_target': _stickyTarget,
-    'active_clamp_target': _activeClampTarget,
-    'stable_frames': _stableFrameCount,
-    'protection_active': _h1ProtectionActive,
-    'correction_window': _envelopesWritten < 400,
-    'frames_written': _envelopesWritten,
-    'h1_acf_support': _acfSupportNear(_h1Bpm, radius: 2.0),
-    'family_count': -1,
-    'unified_candidates': -1,
-  };
+        'env_len': _onsetCurve.length,
+        'energy_db': _energyDb,
+        'written_frames': _envelopesWritten,
+        'window_frames': _framesPerWindow,
+        'last_frame_rms': _lastFrameRms,
+        'format_guess': _formatGuess,
+        'hypotheses': {
+          'h1_bpm': _h1Bpm,
+          'h1_score': _h1Score,
+          'h2_bpm': _h2Bpm,
+          'h2_score': _h2Score,
+          'h3_bpm': _h3Bpm,
+          'h3_score': _h3Score,
+        },
+        'last_acf_top': _lastAcfTop,
+        'octave_history': _octaveHistory,
+        'recent_candidates': _recentCandidates.length,
+        'sticky_target': _stickyTarget,
+        'active_clamp_target': _activeClampTarget,
+        'stable_frames': _stableFrameCount,
+        'protection_active': _h1ProtectionActive,
+        'correction_window': _envelopesWritten < 400,
+        'frames_written': _envelopesWritten,
+        'h1_acf_support': _acfSupportNear(_h1Bpm, radius: 2.0),
+        'family_count': -1,
+        'unified_candidates': -1,
+      };
 
   final int sampleRate;
   final int frameSize;
@@ -201,9 +203,11 @@ class BpmEstimator {
     this.metronomeCandidateRadius = 2.0,
     this.metronomeMinScore = 0.90,
   })  : _hann = List<double>.generate(
-    frameSize,
-        (int n) => frameSize <= 1 ? 1.0 : (0.5 - 0.5 * math.cos(2 * math.pi * n / (frameSize - 1))),
-  ),
+          frameSize,
+          (int n) => frameSize <= 1
+              ? 1.0
+              : (0.5 - 0.5 * math.cos(2 * math.pi * n / (frameSize - 1))),
+        ),
         _prevMag = List<double>.filled(frameSize ~/ 2 + 1, 0.0),
         _smoothMag = List<double>.filled(frameSize ~/ 2 + 1, 1e-3) {
     if (sampleRate <= 0) throw ArgumentError('sampleRate must be positive');
@@ -211,7 +215,8 @@ class BpmEstimator {
       throw ArgumentError('frameSize must be a positive power of 2');
     }
     if (minBpm >= maxBpm) throw ArgumentError('minBpm < maxBpm required');
-    _framesPerWindow = math.max(32, (windowSeconds * sampleRate / frameSize).round());
+    _framesPerWindow =
+        math.max(32, (windowSeconds * sampleRate / frameSize).round());
   }
 
   factory BpmEstimator.forMetronome({
@@ -260,7 +265,8 @@ class BpmEstimator {
     _h1ProtectionActive = false;
   }
 
-  void addBytes(Uint8List bytes, {required int channels, required bool isFloat32}) {
+  void addBytes(Uint8List bytes,
+      {required int channels, required bool isFloat32}) {
     if (bytes.isEmpty || channels <= 0) return;
     _formatGuess = isFloat32 ? 'float32' : 'pcm16';
     final ByteData bd = ByteData.sublistView(bytes);
@@ -288,7 +294,8 @@ class BpmEstimator {
         double s = 0.0;
         for (int ch = 0; ch < channels; ch++) {
           final int idx = 2 * (i + ch);
-          if (idx + 1 < bytes.length) s += bd.getInt16(idx, Endian.little) / 32768.0;
+          if (idx + 1 < bytes.length)
+            s += bd.getInt16(idx, Endian.little) / 32768.0;
         }
         s /= channels;
         if (s.isFinite) {
@@ -301,7 +308,8 @@ class BpmEstimator {
 
     if (processedSamples > 0) {
       _lastFrameRms = math.sqrt(frameEnergy / processedSamples);
-      _energyDb = _lastFrameRms > 0 ? 20 * math.log(_lastFrameRms) / math.ln10 : -120.0;
+      _energyDb =
+          _lastFrameRms > 0 ? 20 * math.log(_lastFrameRms) / math.ln10 : -120.0;
     }
   }
 
@@ -328,7 +336,8 @@ class BpmEstimator {
       final int half = frameSize ~/ 2;
       const double alpha = 0.95;
       for (int k = 1; k <= half; k++) {
-        final double mag = math.sqrt(f.real[k] * f.real[k] + f.imag[k] * f.imag[k]);
+        final double mag =
+            math.sqrt(f.real[k] * f.real[k] + f.imag[k] * f.imag[k]);
         if (enableWhitening) {
           _smoothMag[k] = alpha * _smoothMag[k] + (1 - alpha) * mag;
           final double whiten = (mag / (_smoothMag[k] + 1e-9)) - 1.0;
@@ -401,8 +410,10 @@ class BpmEstimator {
     final int n = _onsetCurve.length;
     if (n < 48) return;
 
-    final int minLag = math.max(2, (60.0 * sampleRate / (frameSize * maxBpm)).round());
-    final int maxLag = math.min(n - 3, (60.0 * sampleRate / (frameSize * minBpm)).round());
+    final int minLag =
+        math.max(2, (60.0 * sampleRate / (frameSize * maxBpm)).round());
+    final int maxLag =
+        math.min(n - 3, (60.0 * sampleRate / (frameSize * minBpm)).round());
     if (minLag >= maxLag) return;
 
     final Map<int, double> acf = <int, double>{};
@@ -436,7 +447,8 @@ class BpmEstimator {
 
     for (int i = 0; i < keep; i++) {
       final int lag = sorted[i].key;
-      final double refined = _parabolicRefinePeak(enhanced, lag, minLag, maxLag);
+      final double refined =
+          _parabolicRefinePeak(enhanced, lag, minLag, maxLag);
       final double bpm = 60.0 / (refined * frameSize / sampleRate);
       final double totalScore = sorted[i].value;
       _lastAcfTop.add({'lag': refined, 'bpm': bpm, 'score': totalScore});
@@ -444,14 +456,15 @@ class BpmEstimator {
       candScores.add(totalScore);
     }
 
-    _recentCandidates.add(candidates.sublist(0, math.min(8, candidates.length)));
+    _recentCandidates
+        .add(candidates.sublist(0, math.min(8, candidates.length)));
     if (_recentCandidates.length > 5) _recentCandidates.removeAt(0);
 
     if (_envelopesWritten % 100 == 0) {
-      print('\n=== ACF PEAKS at ${_envelopesWritten/10}s ===');
+      print('\n=== ACF PEAKS at ${_envelopesWritten / 10}s ===');
       for (int i = 0; i < math.min(10, _lastAcfTop.length); i++) {
         final peak = _lastAcfTop[i];
-        print('${i+1}. ${peak['bpm']!.toStringAsFixed(1)} BPM '
+        print('${i + 1}. ${peak['bpm']!.toStringAsFixed(1)} BPM '
             '(score: ${(peak['score']! * 100).toStringAsFixed(1)}%)');
       }
       print('Selected: ${_h1Bpm.toStringAsFixed(1)} BPM\n');
@@ -467,8 +480,10 @@ class BpmEstimator {
       familyScores.add(family.totalScore);
     }
 
-    final List<double> unifiedCandidates = familyBpms.isNotEmpty ? familyBpms : candidates;
-    final List<double> unifiedScores = familyScores.isNotEmpty ? familyScores : candScores;
+    final List<double> unifiedCandidates =
+        familyBpms.isNotEmpty ? familyBpms : candidates;
+    final List<double> unifiedScores =
+        familyScores.isNotEmpty ? familyScores : candScores;
 
     // ====================================================================
     // v6.12.5 FIX #1: CALCULATE LOCK STATE EARLY (before hypothesis updates)
@@ -476,14 +491,17 @@ class BpmEstimator {
     // ====================================================================
 
     // Calculate preliminary stability to determine current lock state
-    final double prelimStab = _bpmHist.isNotEmpty ? _stabilityMAD(_bpmHist) : 0.0;
+    final double prelimStab =
+        _bpmHist.isNotEmpty ? _stabilityMAD(_bpmHist) : 0.0;
 
     // Calculate preliminary confidence
     final double total = math.max(1e-9, _h1Score + _h2Score + _h3Score);
     double prelimConf = _h1Score / total;
 
     // Track stability for lock/unlock decisions
-    if (_lastStableBpm > 0 && _emaBpm > 0 && (_emaBpm - _lastStableBpm).abs() <= 3.0) {
+    if (_lastStableBpm > 0 &&
+        _emaBpm > 0 &&
+        (_emaBpm - _lastStableBpm).abs() <= 3.0) {
       _stableFrameCount++;
     } else {
       _stableFrameCount = 0;
@@ -495,8 +513,10 @@ class BpmEstimator {
     bool isLockedNow = wasLocked; // Start with previous state
 
     final double refBpm = _emaBpm > 0 ? _emaBpm : 100.0;
-    final int dynLockFrames = math.max(8, (_bpmToLag(refBpm) * beatsToLock).round());
-    final int dynUnlockFrames = math.max(4, (_bpmToLag(refBpm) * beatsToUnlock).round());
+    final int dynLockFrames =
+        math.max(8, (_bpmToLag(refBpm) * beatsToLock).round());
+    final int dynUnlockFrames =
+        math.max(4, (_bpmToLag(refBpm) * beatsToUnlock).round());
 
     // Update lock counters based on current conditions
     if (prelimStab >= lockStabilityHi && prelimConf >= 0.60) {
@@ -512,7 +532,8 @@ class BpmEstimator {
       _lockGoodFrames = 0;
       // v6.12.5 FIX #3: 4X unlock threshold for reasonable BPM
       final bool inGoodRange = _emaBpm >= 95 && _emaBpm <= 180;
-      final int unlockThreshold = inGoodRange ? (dynUnlockFrames * 4) : dynUnlockFrames;
+      final int unlockThreshold =
+          inGoodRange ? (dynUnlockFrames * 4) : dynUnlockFrames;
       if (_lockBadFrames >= unlockThreshold) isLockedNow = false;
     } else {
       if (_lockGoodFrames > 0) _lockGoodFrames--;
@@ -600,9 +621,8 @@ class BpmEstimator {
       _h3Score = ts;
     }
 
-    final double effectiveSwitchThreshold = _h1ProtectionActive
-        ? switchThreshold * 1.75
-        : switchThreshold;
+    final double effectiveSwitchThreshold =
+        _h1ProtectionActive ? switchThreshold * 1.75 : switchThreshold;
 
     if (_h2Score > _h1Score * effectiveSwitchThreshold) {
       _switchHold++;
@@ -618,7 +638,9 @@ class BpmEstimator {
       if (_switchHold > 0) _switchHold--;
     }
 
-    double selected = (_h1Bpm > 0.0) ? _h1Bpm : (candidates.isNotEmpty ? candidates.first : 0.0);
+    double selected = (_h1Bpm > 0.0)
+        ? _h1Bpm
+        : (candidates.isNotEmpty ? candidates.first : 0.0);
 
     // Recalculate confidence with final hypothesis values
     final double totalFinal = math.max(1e-9, _h1Score + _h2Score + _h3Score);
@@ -632,12 +654,14 @@ class BpmEstimator {
       final recent = _octaveHistory.sublist(_octaveHistory.length - 8);
       final median = _computeMedian(recent);
       if (median > 0) {
-        final deviations = recent.map((v) => (v - median).abs() / median).toList();
+        final deviations =
+            recent.map((v) => (v - median).abs() / median).toList();
         final avgDev = deviations.reduce((a, b) => a + b) / recent.length;
         if (avgDev < 0.03) conf = (conf * 1.15).clamp(0.0, 1.0);
       }
     }
-    final strongCandidates = candScores.where((s) => s > totalFinal * 0.3).length;
+    final strongCandidates =
+        candScores.where((s) => s > totalFinal * 0.3).length;
     if (strongCandidates > 4) conf = (conf * 0.85).clamp(0.0, 1.0);
 
     if (_last.bpm > 0 && selected > 0) {
@@ -645,11 +669,10 @@ class BpmEstimator {
       final ratio = selected / lastBpm;
 
       if (ratio < 0.75 || ratio > 1.35) {
-        final bool isOctaveRelated =
-            (ratio >= 0.45 && ratio <= 0.55) ||
-                (ratio >= 1.90 && ratio <= 2.10) ||
-                (ratio >= 0.63 && ratio <= 0.71) ||
-                (ratio >= 1.45 && ratio <= 1.55);
+        final bool isOctaveRelated = (ratio >= 0.45 && ratio <= 0.55) ||
+            (ratio >= 1.90 && ratio <= 2.10) ||
+            (ratio >= 0.63 && ratio <= 0.71) ||
+            (ratio >= 1.45 && ratio <= 1.55);
 
         if (!isOctaveRelated && _last.stability > 0.60) {
           if (conf < 0.85) {
@@ -661,7 +684,8 @@ class BpmEstimator {
 
     bool clampLocked = false;
     if (metronomeClampEnabled) {
-      final double? clamped = _tryMetronomeClamp(selected, unifiedCandidates, conf);
+      final double? clamped =
+          _tryMetronomeClamp(selected, unifiedCandidates, conf);
       if (clamped != null) {
         selected = clamped;
         conf = math.max(conf, 0.92);
@@ -687,7 +711,8 @@ class BpmEstimator {
         // LOCKED: Freeze EMA - only 0.2% update rate
         alpha = 0.002;
         if (_envelopesWritten % 50 == 0) {
-          print('❄️  EMA FROZEN: alpha=0.002 (99.8% hold) • current: ${_emaBpm.toStringAsFixed(2)} • new: ${selected.toStringAsFixed(2)}');
+          print(
+              '❄️  EMA FROZEN: alpha=0.002 (99.8% hold) • current: ${_emaBpm.toStringAsFixed(2)} • new: ${selected.toStringAsFixed(2)}');
         }
       } else {
         // UNLOCKED: Normal adaptive EMA
@@ -723,11 +748,13 @@ class BpmEstimator {
         // Use top ACF peak if it's strong enough (>80% confidence, ignore distance)
         if (topScore > 0.80 && topBpm >= minBpm && topBpm <= maxBpm) {
           lockTarget = topBpm;
-          print('🎯 LOCK: Using top ACF peak ${topBpm.toStringAsFixed(1)} BPM (score: ${(topScore * 100).toStringAsFixed(0)}%) instead of selected ${selected.toStringAsFixed(1)}');
+          print(
+              '🎯 LOCK: Using top ACF peak ${topBpm.toStringAsFixed(1)} BPM (score: ${(topScore * 100).toStringAsFixed(0)}%) instead of selected ${selected.toStringAsFixed(1)}');
         }
       }
 
-      print('🔒 LOCK TRANSITION: Resetting EMA from $_emaBpm to $lockTarget, clearing sticky target, resetting deadband $_reportedBpm → 0.0');
+      print(
+          '🔒 LOCK TRANSITION: Resetting EMA from $_emaBpm to $lockTarget, clearing sticky target, resetting deadband $_reportedBpm → 0.0');
       _emaBpm = lockTarget;
       selected = lockTarget;
       _stickyTarget = null;
@@ -739,15 +766,19 @@ class BpmEstimator {
 
     if (useKalmanFilter) {
       final double processNoise = isLockedNow ? 0.005 : 0.03;
-      final double measurementNoise = isLockedNow ? 0.05 : (1.0 - conf) * 1.5 + 0.1;
+      final double measurementNoise =
+          isLockedNow ? 0.05 : (1.0 - conf) * 1.5 + 0.1;
       outInternal = _kalman.update(outInternal, processNoise, measurementNoise);
     }
 
-    final double deadband = _lagFracToBpmRadius(
-        outInternal, isLockedNow ? reportDeadbandLocked : reportDeadbandUnlocked);
+    final double deadband = _lagFracToBpmRadius(outInternal,
+        isLockedNow ? reportDeadbandLocked : reportDeadbandUnlocked);
     double out = outInternal;
 
-    if (isLockedNow && _reportedBpm > 0 && (out - _reportedBpm).abs() > 5.0 && conf > 0.85) {
+    if (isLockedNow &&
+        _reportedBpm > 0 &&
+        (out - _reportedBpm).abs() > 5.0 &&
+        conf > 0.85) {
       out = outInternal;
     } else if (_reportedBpm > 0 && (out - _reportedBpm).abs() < deadband) {
       out = _reportedBpm;
@@ -776,7 +807,8 @@ class BpmEstimator {
     return (denom > 0.0) ? (s / denom) : 0.0;
   }
 
-  double _parabolicRefinePeak(Map<int, double> acf, int lag, int minLag, int maxLag) {
+  double _parabolicRefinePeak(
+      Map<int, double> acf, int lag, int minLag, int maxLag) {
     if (lag <= minLag || lag >= maxLag) return lag.toDouble();
     final double y0 = acf[lag - 1] ?? 0.0;
     final double y1 = acf[lag] ?? 0.0;
@@ -831,12 +863,14 @@ class BpmEstimator {
 
     if (confidence >= 0.65 || (bpm - original).abs() < 0.1) {
       _octaveHistory.add(bpm);
-      if (_octaveHistory.length > _octaveHistorySize) _octaveHistory.removeAt(0);
+      if (_octaveHistory.length > _octaveHistorySize)
+        _octaveHistory.removeAt(0);
     }
     return bpm;
   }
 
-  double? _tryMetronomeClamp(double selected, List<double> candidates, double confidence) {
+  double? _tryMetronomeClamp(
+      double selected, List<double> candidates, double confidence) {
     _activeClampTarget = null;
     double? bestTarget;
     double bestScore = -1.0;
@@ -862,11 +896,13 @@ class BpmEstimator {
     for (final t in metronomeTargets) {
       double score = -1.0;
       if (near(selected, t, metronomeClampRadius)) score = 0.90;
-      if (_hasCandidateNear(t, r: metronomeCandidateRadius)) score = math.max(score, 0.86);
+      if (_hasCandidateNear(t, r: metronomeCandidateRadius))
+        score = math.max(score, 0.86);
 
       for (final c in candidates) {
         final bool isHalfOrDouble =
-            near(c * 2.0, t, metronomeCandidateRadius) || near(c * 0.5, t, metronomeCandidateRadius);
+            near(c * 2.0, t, metronomeCandidateRadius) ||
+                near(c * 0.5, t, metronomeCandidateRadius);
         if (isHalfOrDouble) {
           final double acfTop = _acfSupportFor(t);
           if (acfTop > 0.50) score = math.max(score, 0.86);
@@ -882,7 +918,8 @@ class BpmEstimator {
         final bool cand120 = _hasCandidateNear(120.0, r: 1.4);
         final bool cand60 = _hasCandidateNear(60.0, r: 1.0);
         final double acf120 = _acfSupportFor(120.0, tight: 1.4);
-        if ((near120Band || near60Band) && (acf120 > 0.42 || cand120 || cand60)) {
+        if ((near120Band || near60Band) &&
+            (acf120 > 0.42 || cand120 || cand60)) {
           score = math.max(score, 0.965);
         }
       }
@@ -897,7 +934,8 @@ class BpmEstimator {
     return bestTarget;
   }
 
-  double _applyStickyTarget(double bpm, double confidence, bool isLocked, double stability) {
+  double _applyStickyTarget(
+      double bpm, double confidence, bool isLocked, double stability) {
     return bpm;
   }
 
@@ -963,7 +1001,9 @@ class BpmEstimator {
     if (values.isEmpty) return 0.0;
     final sorted = List<double>.from(values)..sort();
     final mid = sorted.length ~/ 2;
-    return sorted.length.isOdd ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2.0;
+    return sorted.length.isOdd
+        ? sorted[mid]
+        : (sorted[mid - 1] + sorted[mid]) / 2.0;
   }
 
   _FftResult _fft(List<double> input) {
@@ -1020,13 +1060,15 @@ class BpmEstimator {
         (r > 2.90 && r < 3.10);
   }
 
-  double _blendTempo(double base, double baseScore, double add, double addScore) {
+  double _blendTempo(
+      double base, double baseScore, double add, double addScore) {
     final double w1 = math.max(1e-9, baseScore);
     final double w2 = math.max(1e-9, addScore);
     return (base * w1 + add * w2) / (w1 + w2);
   }
 
-  List<_TempoFamily> _groupIntoTempoFamilies(List<double> bpms, List<double> scores) {
+  List<_TempoFamily> _groupIntoTempoFamilies(
+      List<double> bpms, List<double> scores) {
     if (bpms.isEmpty) return [];
 
     final List<_TempoFamily> families = [];
@@ -1043,12 +1085,11 @@ class BpmEstimator {
         if (used.contains(j)) continue;
 
         final ratio = bpms[j] / baseBpm;
-        final isOctaveRelated =
-            (ratio >= 0.48 && ratio <= 0.52) ||
-                (ratio >= 0.95 && ratio <= 1.05) ||
-                (ratio >= 1.95 && ratio <= 2.05) ||
-                (ratio >= 0.63 && ratio <= 0.71) ||
-                (ratio >= 1.45 && ratio <= 1.55);
+        final isOctaveRelated = (ratio >= 0.48 && ratio <= 0.52) ||
+            (ratio >= 0.95 && ratio <= 1.05) ||
+            (ratio >= 1.95 && ratio <= 2.05) ||
+            (ratio >= 0.63 && ratio <= 0.71) ||
+            (ratio >= 1.45 && ratio <= 1.55);
 
         if (isOctaveRelated) {
           memberIndices.add(j);
