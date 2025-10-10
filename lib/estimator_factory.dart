@@ -1,5 +1,5 @@
 // lib/estimator_factory.dart
-// Fixed: Removed all non-existent parameters
+// Fixed: Corrected parameter names for lock stability
 
 import 'bpm_estimator.dart';
 import 'calibration_tools.dart';
@@ -15,7 +15,7 @@ class EstimatorFactory {
     final rec = HintCalibrator(
       hintBpm: hintBpm,
       bandTightness:
-          hintBpm == null ? HintBandTightness.loose : HintBandTightness.medium,
+      hintBpm == null ? HintBandTightness.loose : HintBandTightness.medium,
       defaultMinBpm: 60,
       defaultMaxBpm: 190,
     ).recommend();
@@ -33,8 +33,10 @@ class EstimatorFactory {
       hypothesisDecay: 0.97,
       switchThreshold: 1.35,
       switchHoldFrames: 4,
-      lockStability: 0.78,
-      unlockStability: 0.62,
+      lockStabilityHi: 0.78,      // ✅ FIXED: was 'lockStability'
+      lockStabilityLo: 0.62,      // ✅ FIXED: was 'unlockStability'
+      beatsToLock: 4.5,           // Added: required parameter
+      beatsToUnlock: 2.5,         // Added: required parameter
       reportDeadbandUnlocked: 0.04,
       reportDeadbandLocked: 0.20,
       reportQuantUnlocked: 0.02,

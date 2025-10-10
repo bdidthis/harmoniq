@@ -1,21 +1,27 @@
 // lib/bpm_estimator.dart
-// HarmoniQ BPM Estimator — v6.3 "Enhanced Anti-Halftime + Full Parameter Support"
+// HarmoniQ BPM Estimator — v6.12.0 "ACF LOCK TARGET"
 //
-// FIXES:
-// - Constructor now accepts ALL parameters (no more ignored args)
-// - Expanded anti-halftime range: 55-95 BPM (was 70-95)
-// - More aggressive thresholds for half-tempo correction
-// - Runs anti-halftime BEFORE hypothesis selection
-// - Added musical tempo priors throughout
+// CHANGES FROM v6.11.9:
+// 🔄 FIXED: Wrong lock value (126.05 vs 128.9 ACF peak = -2.85 BPM error)
+// 🔄 CAUSE: Hypothesis value used at lock instead of top ACF peak
+// 🔄 FIX: At lock transition, select top ACF peak if strong (>60%) and close (±10 BPM)
+//
+// TEST RESULT (Calvin Harris 127.99 BPM):
+// - v6.11.9: Locked 126.05, drifted to 125.15 (error: -2.84 BPM)
+// - v6.12.0: Should lock at ~128-129 BPM using ACF peak
+//
+// PREVIOUS FIXES:
+// v6.11.9: Unlock protection (2x threshold), family prefers locked value
+// v6.11.8: ACF direct copy when locked+stable
 
 import 'dart:math' as math;
 import 'dart:typed_data';
 
 class BpmEstimate {
   final double bpm;
-  final double stability; // 0..1
+  final double stability;
   final bool isLocked;
-  final double confidence; // 0..1
+  final double confidence;
   const BpmEstimate(this.bpm, this.stability, this.isLocked, this.confidence);
 }
 
@@ -28,15 +34,13 @@ class _FftResult {
 class _KalmanFilter {
   double _estimate = 0.0;
   double _errorCovariance = 1.0;
-  double update(
-      double measurement, double processNoise, double measurementNoise) {
+  double update(double measurement, double processNoise, double measurementNoise) {
     _errorCovariance += processNoise;
     final k = _errorCovariance / (_errorCovariance + measurementNoise);
     _estimate = _estimate + k * (measurement - _estimate);
     _errorCovariance = (1 - k) * _errorCovariance;
     return _estimate;
   }
-
   void reset(double value) {
     _estimate = value;
     _errorCovariance = 1.0;
@@ -69,28 +73,30 @@ class BpmEstimator {
     'recent_candidates': _recentCandidates.length,
     'sticky_target': _stickyTarget,
     'active_clamp_target': _activeClampTarget,
+    'stable_frames': _stableFrameCount,
+    'protection_active': _h1ProtectionActive,
+    'correction_window': _envelopesWritten < 400,
+    'frames_written': _envelopesWritten,
+    'h1_acf_support': _acfSupportNear(_h1Bpm, radius: 2.0),
+    'family_count': -1,
+    'unified_candidates': -1,
   };
 
   final int sampleRate;
   final int frameSize;
   final double windowSeconds;
-
   final double emaAlpha;
   final int historyLength;
-
   final double minBpm;
   final double maxBpm;
-
   final bool useSpectralFlux;
   final double onsetSensitivity;
   final int medianFilterSize;
   final double adaptiveThresholdRatio;
   final bool enableWhitening;
-
   final double hypothesisDecay;
   final double switchThreshold;
   final int switchHoldFrames;
-
   final double lockStabilityHi;
   final double lockStabilityLo;
   final double beatsToLock;
@@ -99,19 +105,14 @@ class BpmEstimator {
   final double reportDeadbandLocked;
   final double reportQuantUnlocked;
   final double reportQuantLocked;
-
   final double minEnergyDb;
-
   final double rescueTolStrong;
   final double rescueTolWeak;
-
   final bool useKalmanFilter;
-
   final double stickyHoldFracLocked;
   final double stickyHoldFracUnlocked;
   final double stickyConfidenceThreshold;
   final int stickyMinFrames;
-
   final bool metronomeClampEnabled;
   final List<double> metronomeTargets;
   final double metronomeClampRadius;
@@ -124,7 +125,6 @@ class BpmEstimator {
   final List<double> _onsetCurve = <double>[];
   final List<double> _onsetHist = <double>[];
   final List<double> _bpmHist = <double>[];
-
   final List<double> _prevMag;
   final List<double> _smoothMag;
 
@@ -156,7 +156,11 @@ class BpmEstimator {
   final _KalmanFilter _kalman = _KalmanFilter();
   double? _activeClampTarget;
 
-  // ENHANCED CONSTRUCTOR - Now accepts ALL parameters
+  int _stableFrameCount = 0;
+  double _lastStableBpm = 0.0;
+  static const int _minFramesBeforeLock = 10;
+  bool _h1ProtectionActive = false;
+
   BpmEstimator({
     required this.sampleRate,
     this.frameSize = 1024,
@@ -170,9 +174,9 @@ class BpmEstimator {
     this.medianFilterSize = 9,
     this.adaptiveThresholdRatio = 1.7,
     this.enableWhitening = true,
-    this.hypothesisDecay = 0.97,
-    this.switchThreshold = 1.35,
-    this.switchHoldFrames = 4,
+    this.hypothesisDecay = 0.985,
+    this.switchThreshold = 2.0,
+    this.switchHoldFrames = 10,
     this.lockStabilityHi = 0.82,
     this.lockStabilityLo = 0.58,
     this.beatsToLock = 4.5,
@@ -185,10 +189,10 @@ class BpmEstimator {
     this.rescueTolStrong = 0.025,
     this.rescueTolWeak = 0.04,
     this.useKalmanFilter = false,
-    this.stickyHoldFracLocked = 0.08,
-    this.stickyHoldFracUnlocked = 0.05,
-    this.stickyConfidenceThreshold = 0.75,
-    this.stickyMinFrames = 12,
+    this.stickyHoldFracLocked = 0.06,
+    this.stickyHoldFracUnlocked = 0.04,
+    this.stickyConfidenceThreshold = 0.65,
+    this.stickyMinFrames = 10,
     this.metronomeClampEnabled = false,
     this.metronomeTargets = const [83.1, 92.3, 103.5, 120.0],
     this.metronomeClampRadius = 1.5,
@@ -196,9 +200,7 @@ class BpmEstimator {
     this.metronomeMinScore = 0.90,
   })  : _hann = List<double>.generate(
     frameSize,
-        (int n) => frameSize <= 1
-        ? 1.0
-        : (0.5 - 0.5 * math.cos(2 * math.pi * n / (frameSize - 1))),
+        (int n) => frameSize <= 1 ? 1.0 : (0.5 - 0.5 * math.cos(2 * math.pi * n / (frameSize - 1))),
   ),
         _prevMag = List<double>.filled(frameSize ~/ 2 + 1, 0.0),
         _smoothMag = List<double>.filled(frameSize ~/ 2 + 1, 1e-3) {
@@ -207,11 +209,9 @@ class BpmEstimator {
       throw ArgumentError('frameSize must be a positive power of 2');
     }
     if (minBpm >= maxBpm) throw ArgumentError('minBpm < maxBpm required');
-    _framesPerWindow =
-        math.max(32, (windowSeconds * sampleRate / frameSize).round());
+    _framesPerWindow = math.max(32, (windowSeconds * sampleRate / frameSize).round());
   }
 
-  // Convenience: explicit metronome-mode builder
   factory BpmEstimator.forMetronome({
     required int sampleRate,
     List<double> targets = const [83.1, 92.3, 103.5, 120.0],
@@ -232,7 +232,6 @@ class BpmEstimator {
     _smoothMag.fillRange(0, _smoothMag.length, 1e-3);
     _octaveHistory.clear();
     _recentCandidates.clear();
-
     _h1Bpm = 0.0;
     _h1Score = 0.0;
     _h2Bpm = 0.0;
@@ -240,29 +239,27 @@ class BpmEstimator {
     _h3Bpm = 0.0;
     _h3Score = 0.0;
     _switchHold = 0;
-
     _emaBpm = 0.0;
     _reportedBpm = 0.0;
     _envelopesWritten = 0;
     _lastAcfTop = <Map<String, double>>[];
-
     _last = const BpmEstimate(0.0, 0.0, false, 0.0);
     _lastFrameRms = 0.0;
     _energyDb = -120.0;
     _formatGuess = 'pcm16';
-
     _lockGoodFrames = 0;
     _lockBadFrames = 0;
     _stickyTarget = null;
     _stickyFrames = 0;
     _kalman.reset(0.0);
     _activeClampTarget = null;
+    _stableFrameCount = 0;
+    _lastStableBpm = 0.0;
+    _h1ProtectionActive = false;
   }
 
-  void addBytes(Uint8List bytes,
-      {required int channels, required bool isFloat32}) {
+  void addBytes(Uint8List bytes, {required int channels, required bool isFloat32}) {
     if (bytes.isEmpty || channels <= 0) return;
-
     _formatGuess = isFloat32 ? 'float32' : 'pcm16';
     final ByteData bd = ByteData.sublistView(bytes);
     double frameEnergy = 0.0;
@@ -289,8 +286,7 @@ class BpmEstimator {
         double s = 0.0;
         for (int ch = 0; ch < channels; ch++) {
           final int idx = 2 * (i + ch);
-          if (idx + 1 < bytes.length)
-            s += bd.getInt16(idx, Endian.little) / 32768.0;
+          if (idx + 1 < bytes.length) s += bd.getInt16(idx, Endian.little) / 32768.0;
         }
         s /= channels;
         if (s.isFinite) {
@@ -303,8 +299,7 @@ class BpmEstimator {
 
     if (processedSamples > 0) {
       _lastFrameRms = math.sqrt(frameEnergy / processedSamples);
-      _energyDb =
-      _lastFrameRms > 0 ? 20 * math.log(_lastFrameRms) / math.ln10 : -120.0;
+      _energyDb = _lastFrameRms > 0 ? 20 * math.log(_lastFrameRms) / math.ln10 : -120.0;
     }
   }
 
@@ -331,8 +326,7 @@ class BpmEstimator {
       final int half = frameSize ~/ 2;
       const double alpha = 0.95;
       for (int k = 1; k <= half; k++) {
-        final double mag =
-        math.sqrt(f.real[k] * f.real[k] + f.imag[k] * f.imag[k]);
+        final double mag = math.sqrt(f.real[k] * f.real[k] + f.imag[k] * f.imag[k]);
         if (enableWhitening) {
           _smoothMag[k] = alpha * _smoothMag[k] + (1 - alpha) * mag;
           final double whiten = (mag / (_smoothMag[k] + 1e-9)) - 1.0;
@@ -388,7 +382,6 @@ class BpmEstimator {
     return w;
   }
 
-  // Helper: max ACF support near a BPM (reads _lastAcfTop)
   double _acfSupportNear(double bpm, {double radius = 1.25}) {
     if (bpm <= 0 || _lastAcfTop.isEmpty) return 0.0;
     double best = 0.0;
@@ -406,10 +399,8 @@ class BpmEstimator {
     final int n = _onsetCurve.length;
     if (n < 48) return;
 
-    final int minLag =
-    math.max(2, (60.0 * sampleRate / (frameSize * maxBpm)).round());
-    final int maxLag =
-    math.min(n - 3, (60.0 * sampleRate / (frameSize * minBpm)).round());
+    final int minLag = math.max(2, (60.0 * sampleRate / (frameSize * maxBpm)).round());
+    final int maxLag = math.min(n - 3, (60.0 * sampleRate / (frameSize * minBpm)).round());
     if (minLag >= maxLag) return;
 
     final Map<int, double> acf = <int, double>{};
@@ -443,8 +434,7 @@ class BpmEstimator {
 
     for (int i = 0; i < keep; i++) {
       final int lag = sorted[i].key;
-      final double refined =
-      _parabolicRefinePeak(enhanced, lag, minLag, maxLag);
+      final double refined = _parabolicRefinePeak(enhanced, lag, minLag, maxLag);
       final double bpm = 60.0 / (refined * frameSize / sampleRate);
       final double totalScore = sorted[i].value;
       _lastAcfTop.add({'lag': refined, 'bpm': bpm, 'score': totalScore});
@@ -452,61 +442,77 @@ class BpmEstimator {
       candScores.add(totalScore);
     }
 
-    _recentCandidates
-        .add(candidates.sublist(0, math.min(8, candidates.length)));
+    _recentCandidates.add(candidates.sublist(0, math.min(8, candidates.length)));
     if (_recentCandidates.length > 5) _recentCandidates.removeAt(0);
 
-    // ===== ENHANCED ANTI-HALFTIME - RUNS BEFORE HYPOTHESIS SELECTION =====
-    // This is CRITICAL: fix candidates BEFORE they become hypotheses
-    for (int i = 0; i < candidates.length; i++) {
-      final double cand = candidates[i];
-
-      // EXPANDED RANGE: 55-95 BPM (catches Calvin Harris at 64, Nirvana at 65)
-      if (cand >= 55.0 && cand <= 95.0) {
-        final double dbl = (cand * 2.0).clamp(minBpm, maxBpm);
-
-        if (dbl >= 100.0 && dbl <= maxBpm) {
-          final double selfAcf = _acfSupportNear(cand);
-          final double dblAcf = _acfSupportNear(dbl);
-          final bool dblInCands = candidates.any((c) => (c - dbl).abs() <= 2.0);
-
-          // MUCH MORE AGGRESSIVE THRESHOLDS
-          double threshold = 0.45; // Default: promote if double is 45% as strong
-
-          // Even more aggressive in specific cases
-          if (dblInCands) threshold = 0.35; // Double tempo in top candidates
-          if (candScores[i] < 0.50) threshold = 0.30; // Low confidence on half-tempo
-          if (cand >= 60.0 && cand <= 67.0) threshold = 0.25; // Classic half-tempo zone
-
-          // Promote to double if evidence supports it
-          if (dblAcf >= selfAcf * threshold) {
-            candidates[i] = dbl;
-            // Also boost the score since we're correcting an error
-            candScores[i] = candScores[i] * 1.15;
-          }
-        }
+    if (_envelopesWritten % 100 == 0) {
+      print('\n=== ACF PEAKS at ${_envelopesWritten/10}s ===');
+      for (int i = 0; i < math.min(10, _lastAcfTop.length); i++) {
+        final peak = _lastAcfTop[i];
+        print('${i+1}. ${peak['bpm']!.toStringAsFixed(1)} BPM '
+            '(score: ${(peak['score']! * 100).toStringAsFixed(1)}%)');
       }
+      print('Selected: ${_h1Bpm.toStringAsFixed(1)} BPM\n');
     }
-    // ===== END ANTI-HALFTIME =====
 
-    _h1Score *= hypothesisDecay;
-    _h2Score *= hypothesisDecay;
-    _h3Score *= hypothesisDecay;
+    final families = _groupIntoTempoFamilies(candidates, candScores);
 
-    for (int i = 0; i < candidates.length; i++) {
-      final double bpm = candidates[i];
-      final double score = candScores[i];
+    final List<double> familyBpms = [];
+    final List<double> familyScores = [];
+
+    for (final family in families) {
+      familyBpms.add(family.representative);
+      familyScores.add(family.totalScore);
+    }
+
+    final List<double> unifiedCandidates = familyBpms.isNotEmpty ? familyBpms : candidates;
+    final List<double> unifiedScores = familyScores.isNotEmpty ? familyScores : candScores;
+
+    final bool nearLock = _last.stability >= 0.75 || _last.isLocked;
+    final double h1AcfSupport = _acfSupportNear(_h1Bpm, radius: 2.0);
+    final bool h1StronglySupported = h1AcfSupport > 0.65;
+    final bool inCorrectionWindow = _envelopesWritten < 400;
+
+    bool h1OctaveValid = h1AcfSupport > 0.40;
+
+    final bool shouldProtect = nearLock &&
+        _h1Bpm > 0 &&
+        _h1Score > 0 &&
+        h1StronglySupported &&
+        h1OctaveValid &&
+        !inCorrectionWindow;
+
+    _h1ProtectionActive = shouldProtect;
+
+    if (shouldProtect) {
+      _h1Score *= 0.997;
+      _h1Score += 0.10;
+      _h2Score *= hypothesisDecay;
+      _h3Score *= hypothesisDecay;
+    } else {
+      _h1Score *= hypothesisDecay;
+      _h2Score *= hypothesisDecay;
+      _h3Score *= hypothesisDecay;
+    }
+
+    for (int i = 0; i < unifiedCandidates.length; i++) {
+      final double bpm = unifiedCandidates[i];
+      final double score = unifiedScores[i];
       bool matched = false;
+
+      // When locked+stable, trust ACF peaks more to prevent drift
+      final bool trustAcf = _last.isLocked && _last.stability > 0.90;
+
       if (_sameFamily(bpm, _h1Bpm)) {
-        _h1Bpm = _blendTempo(_h1Bpm, _h1Score, bpm, score);
+        _h1Bpm = trustAcf ? bpm : _blendTempo(_h1Bpm, _h1Score, bpm, score);
         _h1Score += score * 0.6;
         matched = true;
       } else if (_sameFamily(bpm, _h2Bpm)) {
-        _h2Bpm = _blendTempo(_h2Bpm, _h2Score, bpm, score);
+        _h2Bpm = trustAcf ? bpm : _blendTempo(_h2Bpm, _h2Score, bpm, score);
         _h2Score += score * 0.6;
         matched = true;
       } else if (_sameFamily(bpm, _h3Bpm)) {
-        _h3Bpm = _blendTempo(_h3Bpm, _h3Score, bpm, score);
+        _h3Bpm = trustAcf ? bpm : _blendTempo(_h3Bpm, _h3Score, bpm, score);
         _h3Score += score * 0.6;
         matched = true;
       }
@@ -534,12 +540,16 @@ class BpmEstimator {
     if (_h3Score > _h2Score) {
       final tb = _h2Bpm, ts = _h2Score;
       _h2Bpm = _h3Bpm;
-      _h2Score = _h3Score;
+      _h2Score = _h3Score;  // v6.11.5 FIX: Was _h3Score = _h3Score
       _h3Bpm = tb;
       _h3Score = ts;
     }
 
-    if (_h2Score > _h1Score * switchThreshold) {
+    final double effectiveSwitchThreshold = _h1ProtectionActive
+        ? switchThreshold * 1.75
+        : switchThreshold;
+
+    if (_h2Score > _h1Score * effectiveSwitchThreshold) {
       _switchHold++;
       if (_switchHold >= switchHoldFrames) {
         final tb = _h1Bpm, ts = _h1Score;
@@ -553,21 +563,7 @@ class BpmEstimator {
       if (_switchHold > 0) _switchHold--;
     }
 
-    double selected = (_h1Bpm > 0.0)
-        ? _h1Bpm
-        : (candidates.isNotEmpty ? candidates.first : 0.0);
-
-    // Additional musical tempo prior: prefer 100-180 range when uncertain
-    if (selected > 0 && selected < 92.0) {
-      final double alt = (selected * 2.0).clamp(minBpm, maxBpm);
-      final double selAcf = _acfSupportNear(selected);
-      final double altAcf = _acfSupportNear(alt);
-
-      // If double lands in "reasonable" range and has decent support
-      if (alt >= 100.0 && alt <= 180.0 && altAcf >= selAcf * 0.70) {
-        selected = alt;
-      }
-    }
+    double selected = (_h1Bpm > 0.0) ? _h1Bpm : (candidates.isNotEmpty ? candidates.first : 0.0);
 
     final double total = math.max(1e-9, _h1Score + _h2Score + _h3Score);
     double conf = _h1Score / total;
@@ -580,8 +576,7 @@ class BpmEstimator {
       final recent = _octaveHistory.sublist(_octaveHistory.length - 8);
       final median = _computeMedian(recent);
       if (median > 0) {
-        final deviations =
-        recent.map((v) => (v - median).abs() / median).toList();
+        final deviations = recent.map((v) => (v - median).abs() / median).toList();
         final avgDev = deviations.reduce((a, b) => a + b) / recent.length;
         if (avgDev < 0.03) conf = (conf * 1.15).clamp(0.0, 1.0);
       }
@@ -589,9 +584,28 @@ class BpmEstimator {
     final strongCandidates = candScores.where((s) => s > total * 0.3).length;
     if (strongCandidates > 4) conf = (conf * 0.85).clamp(0.0, 1.0);
 
+    if (_last.bpm > 0 && selected > 0) {
+      final lastBpm = _last.bpm;
+      final ratio = selected / lastBpm;
+
+      if (ratio < 0.75 || ratio > 1.35) {
+        final bool isOctaveRelated =
+            (ratio >= 0.45 && ratio <= 0.55) ||
+                (ratio >= 1.90 && ratio <= 2.10) ||
+                (ratio >= 0.63 && ratio <= 0.71) ||
+                (ratio >= 1.45 && ratio <= 1.55);
+
+        if (!isOctaveRelated && _last.stability > 0.60) {
+          if (conf < 0.85) {
+            conf *= 0.70;
+          }
+        }
+      }
+    }
+
     bool clampLocked = false;
     if (metronomeClampEnabled) {
-      final double? clamped = _tryMetronomeClamp(selected, candidates, conf);
+      final double? clamped = _tryMetronomeClamp(selected, unifiedCandidates, conf);
       if (clamped != null) {
         selected = clamped;
         conf = math.max(conf, 0.92);
@@ -600,7 +614,7 @@ class BpmEstimator {
     }
 
     if (!clampLocked) {
-      selected = _octaveRescue(selected, candidates, conf);
+      selected = _octaveRescue(selected, unifiedCandidates, conf);
     }
 
     if (_emaBpm == 0.0) {
@@ -624,44 +638,98 @@ class BpmEstimator {
       _lockGoodFrames = math.max(0, _lockGoodFrames - 2);
     }
 
+    if (_lastStableBpm > 0 && (_emaBpm - _lastStableBpm).abs() <= 3.0) {
+      _stableFrameCount++;
+    } else {
+      _stableFrameCount = 0;
+    }
+    _lastStableBpm = _emaBpm;
+
     final double refBpm = _emaBpm > 0 ? _emaBpm : 100.0;
-    final int dynLockFrames =
-    math.max(8, (_bpmToLag(refBpm) * beatsToLock).round());
-    final int dynUnlockFrames =
-    math.max(4, (_bpmToLag(refBpm) * beatsToUnlock).round());
+    final int dynLockFrames = math.max(8, (_bpmToLag(refBpm) * beatsToLock).round());
+    final int dynUnlockFrames = math.max(4, (_bpmToLag(refBpm) * beatsToUnlock).round());
 
     bool isLockedNow = _last.isLocked;
+    final bool wasLocked = _last.isLocked;
+
     if (clampLocked) {
       _lockGoodFrames++;
       _lockBadFrames = 0;
-      if (_lockGoodFrames >= 12) isLockedNow = true;
+      if (_lockGoodFrames >= 12 &&
+          _stableFrameCount >= _minFramesBeforeLock &&
+          stab >= 0.70 &&
+          conf >= 0.60) {
+        isLockedNow = true;
+      }
     } else if (stab >= lockStabilityHi && conf >= 0.60) {
       _lockGoodFrames++;
       _lockBadFrames = 0;
-      if (_lockGoodFrames >= dynLockFrames) isLockedNow = true;
+      if (_lockGoodFrames >= dynLockFrames &&
+          _stableFrameCount >= _minFramesBeforeLock &&
+          stab >= 0.70) {
+        isLockedNow = true;
+      }
     } else if (stab <= lockStabilityLo) {
       _lockBadFrames++;
       _lockGoodFrames = 0;
-      if (_lockBadFrames >= dynUnlockFrames) isLockedNow = false;
+      // Extra protection: if BPM is reasonable (95-180) and was stable, require more bad frames
+      final bool inGoodRange = _emaBpm >= 95 && _emaBpm <= 180;
+      final int unlockThreshold = inGoodRange ? (dynUnlockFrames * 2) : dynUnlockFrames;
+      if (_lockBadFrames >= unlockThreshold) isLockedNow = false;
     } else {
       if (_lockGoodFrames > 0) _lockGoodFrames--;
       if (_lockBadFrames > 0) _lockBadFrames--;
     }
 
-    double outInternal = _applyStickyTarget(_emaBpm, conf, isLockedNow);
+    // v6.11.7 FIX: Reset EMA on lock transition to prevent pollution from convergence phase
+    // v6.12.0 FIX: Use top ACF peak at lock for accuracy
+    if (isLockedNow && !wasLocked) {
+      // Prefer top ACF peak if it's strong and close to current estimate
+      double lockTarget = selected;
+      if (_lastAcfTop.isNotEmpty) {
+        final topPeak = _lastAcfTop.first;
+        final topBpm = topPeak['bpm'] ?? 0.0;
+        final topScore = topPeak['score'] ?? 0.0;
+
+        // Use top ACF peak if it's strong enough and reasonable
+        if (topScore > 0.60 && topBpm >= minBpm && topBpm <= maxBpm) {
+          // Check if it's close to our current estimate (within 10 BPM)
+          final diff = (topBpm - selected).abs();
+          if (diff <= 10.0) {
+            lockTarget = topBpm;
+          }
+        }
+      }
+
+      print('🔒 LOCK TRANSITION: Resetting EMA from $_emaBpm to $lockTarget (was: $selected, ACF top: ${_lastAcfTop.isNotEmpty ? _lastAcfTop.first['bpm']?.toStringAsFixed(1) : 'none'}), clearing sticky target, resetting deadband $_reportedBpm → 0.0');
+      _emaBpm = lockTarget;  // Reset EMA to lock target
+      selected = lockTarget;  // Update selected to match
+      _stickyTarget = null;
+      _stickyFrames = 0;
+      _reportedBpm = 0.0;
+    }
+
+    double outInternal = _applyStickyTarget(_emaBpm, conf, isLockedNow, stab);
+
+    if (isLockedNow && !wasLocked && _emaBpm != outInternal) {
+      print('   → EMA adjusted from $_emaBpm to $outInternal after sticky clear');
+    }
 
     if (useKalmanFilter) {
       final double processNoise = isLockedNow ? 0.005 : 0.03;
-      final double measurementNoise =
-      isLockedNow ? 0.05 : (1.0 - conf) * 1.5 + 0.1;
+      final double measurementNoise = isLockedNow ? 0.05 : (1.0 - conf) * 1.5 + 0.1;
       outInternal = _kalman.update(outInternal, processNoise, measurementNoise);
     }
 
-    final double deadband =
-    _lagFracToBpmRadius(outInternal, isLockedNow ? reportDeadbandLocked : reportDeadbandUnlocked);
+    final double deadband = _lagFracToBpmRadius(
+        outInternal, isLockedNow ? reportDeadbandLocked : reportDeadbandUnlocked);
     double out = outInternal;
-    if (_reportedBpm > 0 && (out - _reportedBpm).abs() < deadband)
+
+    if (isLockedNow && _reportedBpm > 0 && (out - _reportedBpm).abs() > 5.0 && conf > 0.85) {
+      out = outInternal;
+    } else if (_reportedBpm > 0 && (out - _reportedBpm).abs() < deadband) {
       out = _reportedBpm;
+    }
 
     final double q = isLockedNow ? reportQuantLocked : reportQuantUnlocked;
     out = (out / q).round() * q;
@@ -686,8 +754,7 @@ class BpmEstimator {
     return (denom > 0.0) ? (s / denom) : 0.0;
   }
 
-  double _parabolicRefinePeak(
-      Map<int, double> acf, int lag, int minLag, int maxLag) {
+  double _parabolicRefinePeak(Map<int, double> acf, int lag, int minLag, int maxLag) {
     if (lag <= minLag || lag >= maxLag) return lag.toDouble();
     final double y0 = acf[lag - 1] ?? 0.0;
     final double y1 = acf[lag] ?? 0.0;
@@ -742,14 +809,12 @@ class BpmEstimator {
 
     if (confidence >= 0.65 || (bpm - original).abs() < 0.1) {
       _octaveHistory.add(bpm);
-      if (_octaveHistory.length > _octaveHistorySize)
-        _octaveHistory.removeAt(0);
+      if (_octaveHistory.length > _octaveHistorySize) _octaveHistory.removeAt(0);
     }
     return bpm;
   }
 
-  double? _tryMetronomeClamp(
-      double selected, List<double> candidates, double confidence) {
+  double? _tryMetronomeClamp(double selected, List<double> candidates, double confidence) {
     _activeClampTarget = null;
     double? bestTarget;
     double bestScore = -1.0;
@@ -774,15 +839,12 @@ class BpmEstimator {
 
     for (final t in metronomeTargets) {
       double score = -1.0;
-
       if (near(selected, t, metronomeClampRadius)) score = 0.90;
-      if (_hasCandidateNear(t, r: metronomeCandidateRadius))
-        score = math.max(score, 0.86);
+      if (_hasCandidateNear(t, r: metronomeCandidateRadius)) score = math.max(score, 0.86);
 
       for (final c in candidates) {
         final bool isHalfOrDouble =
-            near(c * 2.0, t, metronomeCandidateRadius) ||
-                near(c * 0.5, t, metronomeCandidateRadius);
+            near(c * 2.0, t, metronomeCandidateRadius) || near(c * 0.5, t, metronomeCandidateRadius);
         if (isHalfOrDouble) {
           final double acfTop = _acfSupportFor(t);
           if (acfTop > 0.50) score = math.max(score, 0.86);
@@ -798,8 +860,7 @@ class BpmEstimator {
         final bool cand120 = _hasCandidateNear(120.0, r: 1.4);
         final bool cand60 = _hasCandidateNear(60.0, r: 1.0);
         final double acf120 = _acfSupportFor(120.0, tight: 1.4);
-        if ((near120Band || near60Band) &&
-            (acf120 > 0.42 || cand120 || cand60)) {
+        if ((near120Band || near60Band) && (acf120 > 0.42 || cand120 || cand60)) {
           score = math.max(score, 0.965);
         }
       }
@@ -814,41 +875,7 @@ class BpmEstimator {
     return bestTarget;
   }
 
-  double _applyStickyTarget(double bpm, double confidence, bool isLocked) {
-    if (_stickyTarget != null && confidence < stickyConfidenceThreshold) {
-      _stickyTarget = null;
-      _stickyFrames = 0;
-    }
-    if (_stickyTarget != null) {
-      final double holdRad = _lagFracToBpmRadius(
-          bpm, isLocked ? stickyHoldFracLocked : stickyHoldFracUnlocked);
-      if ((bpm - _stickyTarget!).abs() <= holdRad) {
-        _stickyFrames++;
-        return _stickyTarget!;
-      }
-      _stickyTarget = null;
-      _stickyFrames = 0;
-    }
-    if (isLocked &&
-        confidence >= stickyConfidenceThreshold &&
-        _bpmHist.length >= stickyMinFrames) {
-      final List<double> tail =
-      _bpmHist.sublist(_bpmHist.length - stickyMinFrames);
-      final double mean = tail.reduce((a, b) => a + b) / tail.length;
-      final double meanRad = _lagFracToBpmRadius(mean, 0.02);
-      bool tight = true;
-      for (final v in tail) {
-        if ((v - mean).abs() > meanRad) {
-          tight = false;
-          break;
-        }
-      }
-      if (tight && _stickyTarget == null) {
-        _stickyTarget = mean;
-        _stickyFrames = 1;
-        return mean;
-      }
-    }
+  double _applyStickyTarget(double bpm, double confidence, bool isLocked, double stability) {
     return bpm;
   }
 
@@ -914,9 +941,7 @@ class BpmEstimator {
     if (values.isEmpty) return 0.0;
     final sorted = List<double>.from(values)..sort();
     final mid = sorted.length ~/ 2;
-    return sorted.length.isOdd
-        ? sorted[mid]
-        : (sorted[mid - 1] + sorted[mid]) / 2.0;
+    return sorted.length.isOdd ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2.0;
   }
 
   _FftResult _fft(List<double> input) {
@@ -973,10 +998,139 @@ class BpmEstimator {
         (r > 2.90 && r < 3.10);
   }
 
-  double _blendTempo(
-      double base, double baseScore, double add, double addScore) {
+  double _blendTempo(double base, double baseScore, double add, double addScore) {
     final double w1 = math.max(1e-9, baseScore);
     final double w2 = math.max(1e-9, addScore);
     return (base * w1 + add * w2) / (w1 + w2);
   }
+
+  List<_TempoFamily> _groupIntoTempoFamilies(List<double> bpms, List<double> scores) {
+    if (bpms.isEmpty) return [];
+
+    final List<_TempoFamily> families = [];
+    final Set<int> used = {};
+
+    for (int i = 0; i < bpms.length; i++) {
+      if (used.contains(i)) continue;
+
+      final baseBpm = bpms[i];
+      final List<int> memberIndices = [i];
+      double totalScore = scores[i];
+
+      for (int j = i + 1; j < bpms.length; j++) {
+        if (used.contains(j)) continue;
+
+        final ratio = bpms[j] / baseBpm;
+        final isOctaveRelated =
+            (ratio >= 0.48 && ratio <= 0.52) ||
+                (ratio >= 0.95 && ratio <= 1.05) ||
+                (ratio >= 1.95 && ratio <= 2.05) ||
+                (ratio >= 0.63 && ratio <= 0.71) ||
+                (ratio >= 1.45 && ratio <= 1.55);
+
+        if (isOctaveRelated) {
+          memberIndices.add(j);
+          totalScore += scores[j];
+          used.add(j);
+        }
+      }
+
+      used.add(i);
+
+      double familyCenter = 0.0;
+      for (final idx in memberIndices) {
+        familyCenter += bpms[idx];
+      }
+      familyCenter /= memberIndices.length;
+
+      double bestRep = baseBpm;
+      double bestRepScore = scores[i];
+      double bestRepEffective = 0.0;
+
+      for (final idx in memberIndices) {
+        final bpm = bpms[idx];
+        final score = scores[idx];
+
+        double candidateEffective = score;
+
+        // Boost candidates near recently locked value
+        if (_last.isLocked && _last.bpm > 0) {
+          final ratio = bpm / _last.bpm;
+          if (ratio >= 0.98 && ratio <= 1.02) {
+            candidateEffective *= 3.0; // Strong boost for exact match
+          }
+        }
+
+        if (bpm >= 110 && bpm <= 140) {
+          candidateEffective *= 4.0;
+        } else if (bpm >= 90 && bpm <= 170) {
+          candidateEffective *= 2.0;
+        } else if (bpm >= 70 && bpm <= 190) {
+          candidateEffective *= 0.8;
+        } else {
+          candidateEffective *= 0.3;
+        }
+
+        if (bestRepEffective == 0.0) {
+          bestRepEffective = bestRepScore;
+          if (bestRep >= 110 && bestRep <= 140) {
+            bestRepEffective *= 4.0;
+          } else if (bestRep >= 90 && bestRep <= 170) {
+            bestRepEffective *= 2.0;
+          } else if (bestRep >= 70 && bestRep <= 190) {
+            bestRepEffective *= 0.8;
+          } else {
+            bestRepEffective *= 0.3;
+          }
+        }
+
+        final effectiveDiff = (candidateEffective - bestRepEffective).abs();
+        final scoreRatio = candidateEffective / (bestRepEffective + 1e-9);
+
+        if (candidateEffective > bestRepEffective * 1.15) {
+          bestRep = bpm;
+          bestRepScore = score;
+          bestRepEffective = candidateEffective;
+        } else if (scoreRatio >= 0.90 && scoreRatio <= 1.10) {
+          final currentDist = (bestRep - familyCenter).abs();
+          final candidateDist = (bpm - familyCenter).abs();
+
+          if (candidateDist < currentDist) {
+            bestRep = bpm;
+            bestRepScore = score;
+            bestRepEffective = candidateEffective;
+          } else if (candidateDist == currentDist && bpm >= 110 && bpm <= 140) {
+            bestRep = bpm;
+            bestRepScore = score;
+            bestRepEffective = candidateEffective;
+          }
+        }
+      }
+
+      families.add(_TempoFamily(
+        representative: bestRep,
+        members: memberIndices.map((idx) => bpms[idx]).toList(),
+        totalScore: totalScore,
+        individualScores: memberIndices.map((idx) => scores[idx]).toList(),
+      ));
+    }
+
+    families.sort((a, b) => b.totalScore.compareTo(a.totalScore));
+
+    return families;
+  }
+}
+
+class _TempoFamily {
+  final double representative;
+  final List<double> members;
+  final double totalScore;
+  final List<double> individualScores;
+
+  _TempoFamily({
+    required this.representative,
+    required this.members,
+    required this.totalScore,
+    required this.individualScores,
+  });
 }
