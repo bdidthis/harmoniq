@@ -1,25 +1,68 @@
-name: harmoniq
-description: harmoniQ clean run
+name: harmoniq_clean_run
+description: HarmoniQ clean run - Audio analysis app with BPM, key detection, and music math
 publish_to: "none"
 version: 0.1.0+1
 
 environment:
+  # Supports Flutter 3.3.0+ with null safety
   sdk: ">=3.3.0 <4.0.0"
 
 dependencies:
   flutter:
     sdk: flutter
+
+  # UI & Icons
   cupertino_icons: ^1.0.8
+
+  # Audio Recording & Playback
   record: ^6.1.1
-  file_picker: ^8.0.0
+  audioplayers: ^6.5.0
+  audio_session: ^0.2.2
+
+  # File System & Paths
   path_provider: ^2.1.4
+  path: ^1.9.1
+  file_picker: ^8.0.0
+
+  # Permissions & Sharing
+  permission_handler: ^12.0.1
+  share_plus: ^11.1.0
+  receive_sharing_intent: ^1.8.1
+
+  # Media Processing
+  ffmpeg_kit_flutter_new_min_gpl: ^1.1.0
+
+  # Machine Learning (TFLite for key detection)
+  tflite_flutter: ^0.11.0
+
+  # Utilities
+  intl: ^0.18.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  # This version is broadly compatible with Dart 3.x and stable Flutter channels.
-  # If you prefer your original ^6.0.0 and it works, you can keep it.
   flutter_lints: ^4.0.0
+  test: ^1.25.15
+  flutter_launcher_icons: ^0.13.1
 
 flutter:
   uses-material-design: true
+
+  # ✅ FIXED: Assets section removed entirely since no assets exist yet
+  # Uncomment and add assets when you have actual files to include:
+  # assets:
+  #   - assets/models/key_default.tflite
+  #   - assets/models/key_pop.tflite
+  #   - assets/models/key_hiphop.tflite
+  #   - assets/icon.png
+
+# App icon configuration
+# Generates platform-specific icons from root-level icon.png
+flutter_launcher_icons:
+  android: false  # Set to true when building for Android
+  ios: true
+  image_path_ios: "icon.png"
+  remove_alpha_ios: true
+  macos:
+    generate: true
+    image_path: "icon.png"

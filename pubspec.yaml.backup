@@ -1,0 +1,54 @@
+name: harmoniq_clean_run
+description: HarmoniQ clean run
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  # Loosened to play nice with current stable Flutter/Dart toolchains
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  record: ^6.1.1
+  audioplayers: ^6.5.0
+  path_provider: ^2.1.4
+  path: ^1.9.1
+  file_picker: ^8.0.0
+  audio_session: ^0.2.2
+  permission_handler: ^12.0.1
+  ffmpeg_kit_flutter_new_min_gpl: ^1.1.0
+  share_plus: ^11.1.0
+  tflite_flutter: ^0.11.0
+  intl: ^0.18.1
+  receive_sharing_intent: ^1.8.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  test: ^1.25.15
+  flutter_launcher_icons: ^0.13.1
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/models/key_default.tflite
+    - assets/models/key_pop.tflite
+    - assets/models/key_hiphop.tflite
+    # Add any other models you want selectable in Day-7:
+    # - assets/models/key_electronic.tflite
+    # - assets/models/key_rock.tflite
+    # - assets/models/key_jazz.tflite
+    # - assets/icon.png   # if you want to use the icon in-app UI too
+
+# App icon configuration (generate platform icons from root-level icon.png)
+flutter_launcher_icons:
+  android: false          # set true only if you plan to build Android too
+  ios: true
+  image_path_ios: "icon.png"
+  remove_alpha_ios: true
+  macos:
+    generate: true
+    image_path: "icon.png"
