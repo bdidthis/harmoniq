@@ -1,29 +1,23 @@
 // lib/analyzer_page.dart
-// HarmoniQ Analyzer — v6.17.5 "WORKS WITH v6.12.5"
+// HarmoniQ Analyzer — v6.17.9 "WORKS WITH v6.12.9"
 //
-// CHANGES FROM v6.17.4:
+// CHANGES FROM v6.17.8:
+// 🔄 Updated to work with bpm_estimator v6.12.9 (minimal drift fix)
+//
+// PREVIOUS CHANGES (v6.17.6):
+// 🔄 Updated to work with bpm_estimator v6.12.6 (hypothesis bug fix + drift protection)
+//
+// PREVIOUS CHANGES (v6.17.5):
 // 🔄 Updated to work with bpm_estimator v6.12.5 (current frame lock fix)
 //
 // PREVIOUS CHANGES (v6.17):
 // 🔒 FIXED: _refineBpm respects lock flag absolutely (no octave validation when locked)
 // 🔒 SYNC: Works with v6.13.0 estimator's lock hold feature
 // 📊 LOGGING: Minimal logging (~95% reduction) - only logs state changes
-//
-// MINIMAL LOGGING STRATEGY:
-// - _refineBpm: Only logs when path changes or BPM changes >0.5 (locked) or >1.0 (unlocked)
-// - Display: Only logs when lock state changes, BPM changes >2.0, or every 100 frames
-// - ACF peaks: Already throttled to every 10s (kept as-is in estimator)
-// - Lock events: Always logged (kept as-is in estimator)
-// - Freeze events: Always logged (kept as-is in estimator)
-//
-// PREVIOUS FIXES (v6.16):
-// - Bias removed (kGlobalBpmBiasPct = 0.0)
-// - _refineBpm trusts raw estimator when locked
 
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:audio_session/audio_session.dart';
 import 'package:file_picker/file_picker.dart';
@@ -42,17 +36,13 @@ import 'genre_config.dart';
 import 'key_detector.dart';
 import 'logger.dart';
 import 'music_math.dart';
+import 'num_extensions.dart';
 import 'paid_tools_page.dart' show PaidToolsPage;
 import 'settings_page.dart';
 import 'system_audio_page.dart';
 
-extension NumCast on num {
-  double get asDouble => toDouble();
-  int get asInt => toInt();
-}
-
 const double kGlobalBpmBiasPct =
-    0.0; // Bias removed - estimator already accurate
+0.0; // Bias removed - estimator already accurate
 
 class AnalyzerPage extends StatefulWidget {
   const AnalyzerPage({super.key});
@@ -152,8 +142,8 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
         AudioSessionConfiguration(
           avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
           avAudioSessionCategoryOptions:
-              AVAudioSessionCategoryOptions.defaultToSpeaker |
-                  AVAudioSessionCategoryOptions.allowBluetooth,
+          AVAudioSessionCategoryOptions.defaultToSpeaker |
+          AVAudioSessionCategoryOptions.allowBluetooth,
           avAudioSessionMode: AVAudioSessionMode.measurement,
           androidAudioAttributes: const AndroidAudioAttributes(
             contentType: AndroidAudioContentType.speech,
@@ -164,7 +154,9 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
         ),
       );
     } catch (e) {
-      debugPrint('Audio session config error: $e');
+      if (kDebugMode) {
+        debugPrint('Audio session config error: $e');
+      }
     }
   }
 
@@ -185,13 +177,13 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     final rec = HintCalibrator(
       hintBpm: hintBpm,
       bandTightness:
-          hintBpm == null ? HintBandTightness.loose : HintBandTightness.medium,
+      hintBpm == null ? HintBandTightness.loose : HintBandTightness.medium,
       defaultMinBpm: _settings.minBpm,
       defaultMaxBpm: _settings.maxBpm,
     ).recommend();
 
-    final args = EstimatorBuildArgs(
-      sampleRate: sampleRate,
+    const args = EstimatorBuildArgs(
+      sampleRate: 44100,
       frameSize: 1024,
       windowSeconds: 12.0,
       emaAlpha: 0.08,
@@ -212,15 +204,42 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
       reportQuantUnlocked: 0.02,
       reportQuantLocked: 0.05,
       minEnergyDb: -60.0,
-      fallbackMinBpm: _settings.minBpm,
-      fallbackMaxBpm: _settings.maxBpm,
+      fallbackMinBpm: 60.0,
+      fallbackMaxBpm: 190.0,
     );
 
     final recToUse = _useTight
         ? HintCalibrator(hintBpm: hintBpm).finalizeTightening(rec)
         : rec;
 
-    _bpm = CalibratedEstimator.fromRecommendation(rec: recToUse, args: args);
+    _bpm = CalibratedEstimator.fromRecommendation(
+      rec: recToUse,
+      args: EstimatorBuildArgs(
+        sampleRate: sampleRate,
+        frameSize: args.frameSize,
+        windowSeconds: args.windowSeconds,
+        emaAlpha: args.emaAlpha,
+        historyLength: args.historyLength,
+        useSpectralFlux: args.useSpectralFlux,
+        onsetSensitivity: args.onsetSensitivity,
+        medianFilterSize: args.medianFilterSize,
+        adaptiveThresholdRatio: args.adaptiveThresholdRatio,
+        hypothesisDecay: args.hypothesisDecay,
+        switchThreshold: args.switchThreshold,
+        switchHoldFrames: args.switchHoldFrames,
+        lockStabilityHi: args.lockStabilityHi,
+        lockStabilityLo: args.lockStabilityLo,
+        beatsToLock: args.beatsToLock,
+        beatsToUnlock: args.beatsToUnlock,
+        reportDeadbandUnlocked: args.reportDeadbandUnlocked,
+        reportDeadbandLocked: args.reportDeadbandLocked,
+        reportQuantUnlocked: args.reportQuantUnlocked,
+        reportQuantLocked: args.reportQuantLocked,
+        minEnergyDb: args.minEnergyDb,
+        fallbackMinBpm: _settings.minBpm,
+        fallbackMaxBpm: _settings.maxBpm,
+      ),
+    );
   }
 
   Future<void> _onGenreChanged(Genre? genre) async {
@@ -243,21 +262,27 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
 
   Future<bool> _ensureMicPermission() async {
     var status = await Permission.microphone.status;
-    if (status.isGranted) return true;
+    if (status.isGranted) {
+      return true;
+    }
 
     if (status.isDenied || status.isRestricted) {
       status = await Permission.microphone.request();
-      if (status.isGranted) return true;
+      if (status.isGranted) {
+        return true;
+      }
     }
 
-    if (await _rec.hasPermission()) return true;
+    if (await _rec.hasPermission()) {
+      return true;
+    }
 
     if (status.isPermanentlyDenied && mounted) {
       setState(() => _lastError = null);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content:
-              const Text('Microphone access needed. Open Settings to enable.'),
+          const Text('Microphone access needed. Open Settings to enable.'),
           action: SnackBarAction(label: 'Settings', onPressed: openAppSettings),
           duration: const Duration(seconds: 5),
         ),
@@ -269,16 +294,22 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
   }
 
   Future<void> _startRecording() async {
-    if (_recording) return;
+    if (_recording) {
+      return;
+    }
     setState(() => _lastError = null);
 
     final ok = await _ensureMicPermission();
-    if (!ok) return;
+    if (!ok) {
+      return;
+    }
 
     try {
       await _audioSession?.setActive(true);
     } catch (e) {
-      debugPrint('Audio session activation error: $e');
+      if (kDebugMode) {
+        debugPrint('Audio session activation error: $e');
+      }
     }
 
     _currentTestId = 'test_${DateTime.now().millisecondsSinceEpoch}';
@@ -293,12 +324,12 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     _lastRefinePath = '';
     _framesSinceLastLog = 0;
 
-    final configs = <RecordConfig>[
-      const RecordConfig(
+    const configs = <RecordConfig>[
+      RecordConfig(
           encoder: AudioEncoder.pcm16bits, sampleRate: 44100, numChannels: 1),
-      const RecordConfig(
+      RecordConfig(
           encoder: AudioEncoder.pcm16bits, sampleRate: 48000, numChannels: 1),
-      const RecordConfig(
+      RecordConfig(
           encoder: AudioEncoder.pcm16bits, sampleRate: 32000, numChannels: 1),
     ];
 
@@ -336,13 +367,17 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
 
     _audioSub?.cancel();
     _audioSub = audioStream.listen(
-      (bytes) {
+          (bytes) {
         try {
-          if (bytes.isEmpty) return;
+          if (bytes.isEmpty) {
+            return;
+          }
           Uint8List b = ((bytes.length & 1) == 1)
               ? bytes.sublist(0, bytes.length - 1)
               : bytes;
-          if (b.isEmpty) return;
+          if (b.isEmpty) {
+            return;
+          }
           if (b.offsetInBytes != 0) {
             b = Uint8List.fromList(b);
           }
@@ -350,7 +385,9 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
           _frameCount++;
         } catch (e) {
           _droppedFrames++;
-          if (mounted) setState(() => _lastError = 'Frame error: $e');
+          if (mounted) {
+            setState(() => _lastError = 'Frame error: $e');
+          }
         }
       },
       onError: (_) => _droppedFrames++,
@@ -403,7 +440,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
       smoothingType: _key.currentConfig.smoothingType.name,
       smoothingStrength: _key.currentConfig.smoothingStrength,
       processingLatency:
-          _frameCount > 0 ? testDuration.inMilliseconds / _frameCount : 0.0,
+      _frameCount > 0 ? testDuration.inMilliseconds / _frameCount : 0.0,
       droppedFrames: _droppedFrames,
       whiteningAlpha: _key.currentConfig.whiteningAlpha,
       bassSuppression: _key.currentConfig.bassSuppression,
@@ -464,7 +501,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     _key.addBytes(alignedBytes, channels: _channels, isFloat32: false);
 
     final int16 =
-        alignedBytes.buffer.asInt16List(0, alignedBytes.lengthInBytes ~/ 2);
+    alignedBytes.buffer.asInt16List(0, alignedBytes.lengthInBytes ~/ 2);
 
     double sumSq = 0.0;
     double maxAbs = 0.0;
@@ -476,14 +513,18 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
       final x = sample / 32768.0;
       sumSq += x * x;
       final a = x.abs();
-      if (a > maxAbs) maxAbs = a;
+      if (a > maxAbs) {
+        maxAbs = a;
+      }
     }
     final n = math.max(1, int16.length ~/ _channels).asInt;
     final rms = math.sqrt(sumSq / n);
     final rmsDb = 20.0 * math.log(rms + 1e-12) / math.ln10;
 
     _rmsHistory.add(rms);
-    if (_rmsHistory.length > _rmsHistorySize) _rmsHistory.removeAt(0);
+    if (_rmsHistory.length > _rmsHistorySize) {
+      _rmsHistory.removeAt(0);
+    }
 
     final estBpm = _bpm.bpm;
 
@@ -510,7 +551,9 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
           // UNLOCKED: Light median smoothing for stability
           _bpmHistory.add(estBpm);
           final windowSize = _getAdaptiveSmoothWindow();
-          if (_bpmHistory.length > windowSize) _bpmHistory.removeAt(0);
+          if (_bpmHistory.length > windowSize) {
+            _bpmHistory.removeAt(0);
+          }
 
           if (_bpmHistory.length < windowSize) {
             return;
@@ -556,8 +599,10 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
         if (shouldLogNow) {
           final mode = _bpm.isLocked ? 'LOCKED' : 'UNLOCKED';
           final lockIcon = _bpm.isLocked ? '🔒' : '🔓';
-          debugPrint(
-              '$lockIcon BPM: $smoothBpm • stab: ${(_bpm.stability * 100).toStringAsFixed(0)}% • conf: ${(_bpm.confidence * 100).toStringAsFixed(0)}% • mode: $mode');
+          if (kDebugMode) {
+            debugPrint(
+                '$lockIcon BPM: $smoothBpm • stab: ${(_bpm.stability * 100).toStringAsFixed(0)}% • conf: ${(_bpm.confidence * 100).toStringAsFixed(0)}% • mode: $mode');
+          }
 
           _lastLoggedLockState = _bpm.isLocked;
           _lastLoggedBpm = smoothBpm;
@@ -587,8 +632,12 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
   }
 
   double _fold(double x, double minB, double maxB) {
-    while (x < minB && x * 2.0 <= maxB) x *= 2.0;
-    while (x > maxB && x / 2.0 >= minB) x /= 2.0;
+    while (x < minB && x * 2.0 <= maxB) {
+      x *= 2.0;
+    }
+    while (x > maxB && x / 2.0 >= minB) {
+      x /= 2.0;
+    }
     return x;
   }
 
@@ -597,20 +646,21 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
   double _refineBpm(double rawFromEstimator, {required double smoothedValue}) {
     double v = rawFromEstimator * (1.0 + kGlobalBpmBiasPct / 100.0);
 
-    final double minB = _settings.minBpm;
-    final double maxB = _settings.maxBpm;
+    const double minB = 60.0;
+    const double maxB = 190.0;
 
     v = _fold(v, minB, maxB);
 
     final locked = _bpm.isLocked;
     final conf = _bpm.confidence;
-    final stab = _bpm.stability;
 
     // v6.17 FIX: If locked, ALWAYS pass through - no validation
     if (locked) {
-      final path = 'LOCKED';
+      const path = 'LOCKED';
       if (_lastRefinePath != path || (v - _lastLoggedBpm).abs() > 0.5) {
-        debugPrint('   _refineBpm: LOCKED PATH → $v');
+        if (kDebugMode) {
+          debugPrint('   _refineBpm: LOCKED PATH → $v');
+        }
         _lastRefinePath = path;
         _lastLoggedBpm = v;
       }
@@ -620,16 +670,20 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     // UNLOCKED PATH: Validate with ACF but trust estimator
     final List<Map<String, dynamic>> tops =
         (_bpm.debugStats['last_acf_top'] as List?)
-                ?.cast<Map<String, dynamic>>() ??
+            ?.cast<Map<String, dynamic>>() ??
             const [];
 
     double acfStrengthFor(double targetBpm) {
-      if (tops.isEmpty || targetBpm <= 0) return 0.0;
+      if (tops.isEmpty || targetBpm <= 0) {
+        return 0.0;
+      }
       double maxScore = 0.0;
       for (final peak in tops) {
         final peakBpm = (peak['bpm'] as num?)?.toDouble() ?? 0.0;
         final score = (peak['score'] as num?)?.toDouble() ?? 0.0;
-        if (peakBpm <= 0) continue;
+        if (peakBpm <= 0) {
+          continue;
+        }
 
         final ratio = targetBpm / peakBpm;
         // Tighter tolerance: must be very close to ACF peak
@@ -645,10 +699,12 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
 
     // If estimator's value has strong ACF support OR high confidence, trust it
     if (rawAcfSupport > 0.40 || conf > 0.70) {
-      final path = 'UNLOCKED-TRUST';
+      const path = 'UNLOCKED-TRUST';
       if (_lastRefinePath != path || (v - _lastLoggedBpm).abs() > 1.0) {
-        debugPrint(
-            '   _refineBpm: UNLOCKED → trusting estimator $v (ACF: ${rawAcfSupport.toStringAsFixed(2)}, conf: ${conf.toStringAsFixed(2)})');
+        if (kDebugMode) {
+          debugPrint(
+              '   _refineBpm: UNLOCKED → trusting estimator $v (ACF: ${rawAcfSupport.toStringAsFixed(2)}, conf: ${conf.toStringAsFixed(2)})');
+        }
         _lastRefinePath = path;
         _lastLoggedBpm = v;
       }
@@ -676,10 +732,12 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     candidates.sort((a, b) => scoreCandidate(a).compareTo(scoreCandidate(b)));
 
     final selected = candidates.first;
-    final path = 'UNLOCKED-OCTAVE';
+    const path = 'UNLOCKED-OCTAVE';
     if (_lastRefinePath != path || (selected - _lastLoggedBpm).abs() > 1.0) {
-      debugPrint(
-          '   _refineBpm: UNLOCKED → octave check selected $selected from ${candidates.length} candidates (raw: $v)');
+      if (kDebugMode) {
+        debugPrint(
+            '   _refineBpm: UNLOCKED → octave check selected $selected from ${candidates.length} candidates (raw: $v)');
+      }
       _lastRefinePath = path;
       _lastLoggedBpm = selected;
     }
@@ -737,17 +795,19 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     try {
       final dir = await getApplicationDocumentsDirectory();
       final entries = await dir.list(recursive: false).toList();
-      final csvs = entries
+      final csvFiles = entries
           .whereType<File>()
           .where((f) => p.extension(f.path).toLowerCase() == '.csv')
           .toList();
-      if (csvs.isEmpty) return null;
-      csvs.sort((a, b) {
+      if (csvFiles.isEmpty) {
+        return null;
+      }
+      csvFiles.sort((a, b) {
         final at = FileStat.statSync(a.path).modified;
         final bt = FileStat.statSync(b.path).modified;
         return bt.compareTo(at);
       });
-      return csvs.first;
+      return csvFiles.first;
     } catch (_) {
       return null;
     }
@@ -756,7 +816,9 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
   Future<void> _shareLatestCsv() async {
     final f = await _findLatestCsvInDocs();
     if (f == null || !await f.exists()) {
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('No CSV found in app documents yet')),
       );
@@ -777,13 +839,17 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
         allowedExtensions: const ['csv'],
         withData: true,
       );
-      if (result == null) return;
+      if (result == null) {
+        return;
+      }
 
       final bytes = result.files.single.bytes;
       final fromPath = result.files.single.path;
       final name = result.files.single.name;
       if (bytes == null && fromPath == null) {
-        if (!mounted) return;
+        if (!mounted) {
+          return;
+        }
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Could not read selected file')),
         );
@@ -795,7 +861,9 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
       final outFile = File(destPath);
       await outFile.writeAsBytes(bytes ?? await File(fromPath!).readAsBytes());
 
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Imported to Documents: ${p.basename(destPath)}'),
@@ -807,7 +875,9 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
         ),
       );
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Import failed: $e')),
       );
@@ -826,26 +896,26 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
   @override
   Widget build(BuildContext context) {
     final keyLabel = _key.label;
-    final keyConf = _key.confidence.clamp(0, 1.0).asDouble;
+    final keyConf = _key.confidence.clamp(0.0, 1.0).asDouble;
     final bpmStr = _displayBpm?.toStringAsFixed(1) ??
         (_bpm.bpm?.toStringAsFixed(1) ?? '--');
     final isLocked = _bpm.isLocked;
     final tuningOffset = _key.tuningOffset;
 
-    const lowKeyConfGate = 0.02;
+    const double lowKeyConfGate = 0.02;
     final showKeyNow = keyConf >= lowKeyConfGate;
     final displayedKey = showKeyNow ? keyLabel : '--';
     final keySubtitle = showKeyNow
         ? (tuningOffset != null
-            ? '${tuningOffset > 0 ? '+' : ''}${tuningOffset.toStringAsFixed(1)}¢'
-            : null)
+        ? '${tuningOffset > 0 ? '+' : ''}${tuningOffset.toStringAsFixed(1)}¢'
+        : null)
         : 'analyzing...';
 
     return GestureDetector(
       onTap: _dismissKeyboard,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('HarmoniQ Analyzer v6.17.5'),
+          title: const Text('HarmoniQ Analyzer v6.17.9'),
           actions: [
             IconButton(
               tooltip: 'Export Logs',
@@ -923,9 +993,9 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                             ),
                             items: Genre.values
                                 .map((g) => DropdownMenuItem(
-                                      value: g,
-                                      child: Text(g.name),
-                                    ))
+                              value: g,
+                              child: Text(g.name),
+                            ))
                                 .toList(),
                             onChanged: _onGenreChanged,
                           ),
@@ -940,9 +1010,9 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                             ),
                             items: _getSubgenresForGenre(_selectedGenre)
                                 .map((s) => DropdownMenuItem(
-                                      value: s,
-                                      child: Text(s.name.replaceAll('_', ' ')),
-                                    ))
+                              value: s,
+                              child: Text(s.name.replaceAll('_', ' ')),
+                            ))
                                 .toList(),
                             onChanged: _onSubgenreChanged,
                           ),
@@ -994,7 +1064,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                 label: 'BPM Confidence',
                 confidence: _bpm.confidence,
                 secondary:
-                    'Stability: ${(_bpm.stability * 100).toStringAsFixed(0)}%',
+                'Stability: ${(_bpm.stability * 100).toStringAsFixed(0)}%',
               ),
               const SizedBox(height: 12),
               Center(
@@ -1014,7 +1084,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                         FilledButton.icon(
                           onPressed: _toggleRecording,
                           icon:
-                              Icon(_recording ? Icons.stop : Icons.play_arrow),
+                          Icon(_recording ? Icons.stop : Icons.play_arrow),
                           label: Text(_recording ? 'Stop' : 'Start'),
                         ),
                         OutlinedButton.icon(
@@ -1077,8 +1147,8 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                             child: TextField(
                               controller: _hintCtrl,
                               keyboardType:
-                                  const TextInputType.numberWithOptions(
-                                      decimal: true),
+                              const TextInputType.numberWithOptions(
+                                  decimal: true),
                               decoration: const InputDecoration(
                                 labelText: 'Hint BPM',
                                 border: OutlineInputBorder(),
@@ -1170,26 +1240,26 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                         OutlinedButton(
                           onPressed: (_displayBpm ?? 0) > 0
                               ? () => setState(() {
-                                    _displayBpm = (_displayBpm! / 2)
-                                        .clamp(1.0, 500.0)
-                                        .asDouble;
-                                    _bpmCtrl.text =
-                                        _displayBpm!.toStringAsFixed(1);
-                                    _liveBpm.value = _displayBpm;
-                                  })
+                            _displayBpm = (_displayBpm! / 2)
+                                .clamp(1.0, 500.0)
+                                .asDouble;
+                            _bpmCtrl.text =
+                                _displayBpm!.toStringAsFixed(1);
+                            _liveBpm.value = _displayBpm;
+                          })
                               : null,
                           child: const Text('½x'),
                         ),
                         OutlinedButton(
                           onPressed: (_displayBpm ?? 0) > 0
                               ? () => setState(() {
-                                    _displayBpm = (_displayBpm! * 2)
-                                        .clamp(1.0, 500.0)
-                                        .asDouble;
-                                    _bpmCtrl.text =
-                                        _displayBpm!.toStringAsFixed(1);
-                                    _liveBpm.value = _displayBpm;
-                                  })
+                            _displayBpm = (_displayBpm! * 2)
+                                .clamp(1.0, 500.0)
+                                .asDouble;
+                            _bpmCtrl.text =
+                                _displayBpm!.toStringAsFixed(1);
+                            _liveBpm.value = _displayBpm;
+                          })
                               : null,
                           child: const Text('2x'),
                         ),
@@ -1335,8 +1405,8 @@ class _ResultCard extends StatelessWidget {
                 Text(
                   title,
                   style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
                 ),
                 if (isLocked) ...[
                   const SizedBox(width: 8),
@@ -1354,8 +1424,8 @@ class _ResultCard extends StatelessWidget {
               child: Text(
                 value,
                 style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
             if (subtitle != null) ...[
@@ -1363,11 +1433,11 @@ class _ResultCard extends StatelessWidget {
               Text(
                 subtitle!,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context)
-                          .colorScheme
-                          .onSurface
-                          .withValues(alpha: 0.7),
-                    ),
+                  color: Theme.of(context)
+                      .colorScheme
+                      .onSurface
+                      .withValues(alpha: 0.7),
+                ),
               ),
             ],
           ],
@@ -1391,7 +1461,7 @@ class _PressHoldMicButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final Color base =
-        isRecording ? Colors.redAccent : Theme.of(context).colorScheme.primary;
+    isRecording ? Colors.redAccent : Theme.of(context).colorScheme.primary;
     final String label = isRecording ? 'Listening…' : 'Hold to Analyze';
 
     return GestureDetector(
@@ -1445,12 +1515,12 @@ class _ConfidenceMeter extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final pct = (confidence.clamp(0, 1) * 100).toStringAsFixed(0);
+    final pct = (confidence.clamp(0.0, 1.0) * 100).toStringAsFixed(0);
     final Color bar = confidence >= 0.75
         ? Colors.greenAccent
         : confidence >= 0.5
-            ? Colors.amberAccent
-            : Colors.redAccent;
+        ? Colors.amberAccent
+        : Colors.redAccent;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1468,7 +1538,7 @@ class _ConfidenceMeter extends StatelessWidget {
         ClipRRect(
           borderRadius: BorderRadius.circular(6),
           child: LinearProgressIndicator(
-            value: confidence.clamp(0, 1),
+            value: confidence.clamp(0.0, 1.0),
             minHeight: 10,
             color: bar,
             backgroundColor: Colors.white12,
@@ -1550,28 +1620,28 @@ class _MusicMathThreeColumn extends StatelessWidget {
     final rows = MusicMathRows.buildThreeColumn(bpm);
 
     Widget cell(String title, MMCell c) => Expanded(
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-            decoration: BoxDecoration(
-              border: Border(
-                  left: BorderSide(color: Theme.of(context).dividerColor)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: Theme.of(context).textTheme.labelMedium),
-                const SizedBox(height: 4),
-                Text('${c.ms.toStringAsFixed(2)} ms',
-                    style: Theme.of(context)
-                        .textTheme
-                        .bodyMedium
-                        ?.copyWith(fontWeight: FontWeight.w600)),
-                Text('(${c.hz.toStringAsFixed(4)} Hz)',
-                    style: Theme.of(context).textTheme.bodySmall),
-              ],
-            ),
-          ),
-        );
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+        decoration: BoxDecoration(
+          border: Border(
+              left: BorderSide(color: Theme.of(context).dividerColor)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: Theme.of(context).textTheme.labelMedium),
+            const SizedBox(height: 4),
+            Text('${c.ms.toStringAsFixed(2)} ms',
+                style: Theme.of(context)
+                    .textTheme
+                    .bodyMedium
+                    ?.copyWith(fontWeight: FontWeight.w600)),
+            Text('(${c.hz.toStringAsFixed(4)} Hz)',
+                style: Theme.of(context).textTheme.bodySmall),
+          ],
+        ),
+      ),
+    );
 
     return Column(
       children: [
@@ -1579,7 +1649,7 @@ class _MusicMathThreeColumn extends StatelessWidget {
           padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
           decoration: BoxDecoration(
             color:
-                Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
+            Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
             borderRadius: BorderRadius.circular(6),
           ),
           child: Row(
@@ -1612,7 +1682,7 @@ class _MusicMathThreeColumn extends StatelessWidget {
               border: Border(
                 bottom: BorderSide(
                     color:
-                        Theme.of(context).dividerColor.withValues(alpha: 0.6)),
+                    Theme.of(context).dividerColor.withValues(alpha: 0.6)),
               ),
             ),
             child: Row(
@@ -1620,7 +1690,7 @@ class _MusicMathThreeColumn extends StatelessWidget {
                 Expanded(
                   child: Padding(
                     padding:
-                        const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                    const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
                     child: Text(r.label),
                   ),
                 ),

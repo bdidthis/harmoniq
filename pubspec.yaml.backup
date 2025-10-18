@@ -4,7 +4,8 @@ publish_to: "none"
 version: 0.1.0+1
 
 environment:
-  sdk: ^3.8.0
+  # Loosened to play nice with current stable Flutter/Dart toolchains
+  sdk: ">=3.3.0 <4.0.0"
 
 dependencies:
   flutter:
@@ -28,6 +29,7 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^4.0.0
   test: ^1.25.15
+  flutter_launcher_icons: ^0.13.1
 
 flutter:
   uses-material-design: true
@@ -35,4 +37,18 @@ flutter:
     - assets/models/key_default.tflite
     - assets/models/key_pop.tflite
     - assets/models/key_hiphop.tflite
+    # Add any other models you want selectable in Day-7:
+    # - assets/models/key_electronic.tflite
+    # - assets/models/key_rock.tflite
+    # - assets/models/key_jazz.tflite
+    # - assets/icon.png   # if you want to use the icon in-app UI too
 
+# App icon configuration (generate platform icons from root-level icon.png)
+flutter_launcher_icons:
+  android: false          # set true only if you plan to build Android too
+  ios: true
+  image_path_ios: "icon.png"
+  remove_alpha_ios: true
+  macos:
+    generate: true
+    image_path: "icon.png"

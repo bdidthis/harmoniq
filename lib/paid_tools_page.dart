@@ -8,13 +8,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'music_math.dart';
+import 'num_extensions.dart'; // ✅ NEW: Shared extension
 import 'offline_file_analyzer_page.dart';
-
-// Collision-proof extension for Paid Tools
-extension NumConvert on num {
-  double get asDouble => toDouble();
-  int get asInt => toInt();
-}
 
 class PaidToolsPage extends StatefulWidget {
   final ValueListenable<double?>? liveBpm;
@@ -241,24 +236,24 @@ class _PaidToolsPageState extends State<PaidToolsPage> {
                       OutlinedButton(
                         onPressed: (bpm ?? 0) > 0
                             ? () => setState(() {
-                                  _displayBpm =
-                                      (bpm! / 2).clamp(1.0, 500.0).asDouble;
-                                  _bpmCtrl.text =
-                                      _displayBpm!.toStringAsFixed(1);
-                                  if (_metroOn) _restartMetronome();
-                                })
+                          _displayBpm = (bpm! / 2)
+                              .clamp(1.0, 500.0)
+                              .asDouble;
+                          _bpmCtrl.text =
+                              _displayBpm!.toStringAsFixed(1);
+                        })
                             : null,
                         child: const Text('½x'),
                       ),
                       OutlinedButton(
                         onPressed: (bpm ?? 0) > 0
                             ? () => setState(() {
-                                  _displayBpm =
-                                      (bpm! * 2).clamp(1.0, 500.0).asDouble;
-                                  _bpmCtrl.text =
-                                      _displayBpm!.toStringAsFixed(1);
-                                  if (_metroOn) _restartMetronome();
-                                })
+                          _displayBpm = (bpm! * 2)
+                              .clamp(1.0, 500.0)
+                              .asDouble;
+                          _bpmCtrl.text =
+                              _displayBpm!.toStringAsFixed(1);
+                        })
                             : null,
                         child: const Text('2x'),
                       ),
@@ -297,10 +292,10 @@ class _PaidToolsPageState extends State<PaidToolsPage> {
                         items: const [2, 3, 4, 5, 6, 7, 8]
                             .map(
                               (v) => DropdownMenuItem(
-                                value: v,
-                                child: Text('$v/4'),
-                              ),
-                            )
+                            value: v,
+                            child: Text('$v/4'),
+                          ),
+                        )
                             .toList(),
                         onChanged: (v) {
                           if (v == null) return;
@@ -379,8 +374,8 @@ class _SectionCard extends StatelessWidget {
             Text(
               title,
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
+                fontWeight: FontWeight.w600,
+              ),
             ),
             const SizedBox(height: 12),
             child,
@@ -400,33 +395,33 @@ class _MusicMathThreeColumn extends StatelessWidget {
     final rows = MusicMathRows.buildThreeColumn(bpm);
 
     Widget cell(String title, MMCell c) => Expanded(
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-            decoration: BoxDecoration(
-              border: Border(
-                left: BorderSide(color: Theme.of(context).dividerColor),
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: Theme.of(context).textTheme.labelMedium),
-                const SizedBox(height: 4),
-                Text(
-                  '${c.ms.toStringAsFixed(2)} ms',
-                  style: Theme.of(context)
-                      .textTheme
-                      .bodyMedium
-                      ?.copyWith(fontWeight: FontWeight.w600),
-                ),
-                Text(
-                  '(${c.hz.toStringAsFixed(4)} Hz)',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
-            ),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+        decoration: BoxDecoration(
+          border: Border(
+            left: BorderSide(color: Theme.of(context).dividerColor),
           ),
-        );
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: Theme.of(context).textTheme.labelMedium),
+            const SizedBox(height: 4),
+            Text(
+              '${c.ms.toStringAsFixed(2)} ms',
+              style: Theme.of(context)
+                  .textTheme
+                  .bodyMedium
+                  ?.copyWith(fontWeight: FontWeight.w600),
+            ),
+            Text(
+              '(${c.hz.toStringAsFixed(4)} Hz)',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ),
+      ),
+    );
 
     return Column(
       children: [

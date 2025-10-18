@@ -19,10 +19,7 @@ import 'key_detector.dart';
 import 'calibration_tools.dart';
 import 'bpm_calibrated.dart';
 import 'logger.dart';
-
-extension _NumCast on num {
-  double get asDouble => toDouble();
-}
+import 'num_extensions.dart'; // ✅ NEW: Shared extension
 
 class OfflineFileAnalyzerPage extends StatefulWidget {
   const OfflineFileAnalyzerPage({super.key});
@@ -104,7 +101,7 @@ class _OfflineFileAnalyzerPageState extends State<OfflineFileAnalyzerPage> {
     final rec = HintCalibrator(
       hintBpm: _hintBpm,
       bandTightness:
-          _hintBpm == null ? HintBandTightness.loose : HintBandTightness.medium,
+      _hintBpm == null ? HintBandTightness.loose : HintBandTightness.medium,
       defaultMinBpm: 60,
       defaultMaxBpm: 190,
     ).recommend();
@@ -229,16 +226,16 @@ class _OfflineFileAnalyzerPageState extends State<OfflineFileAnalyzerPage> {
       );
 
       final rc = await sess.getReturnCode().timeout(
-            const Duration(seconds: 5),
-            onTimeout: () =>
-                throw TimeoutException('FFmpeg return code retrieval timeout'),
-          );
+        const Duration(seconds: 5),
+        onTimeout: () =>
+        throw TimeoutException('FFmpeg return code retrieval timeout'),
+      );
 
       if (!ReturnCode.isSuccess(rc)) {
         final logs = await sess.getAllLogsAsString().timeout(
-              const Duration(seconds: 5),
-              onTimeout: () => '(log retrieval timeout)',
-            );
+          const Duration(seconds: 5),
+          onTimeout: () => '(log retrieval timeout)',
+        );
         setState(() => _error = 'FFmpeg decode failed: $rc\n$logs');
         setState(() => _busy = false);
         return;
@@ -266,7 +263,7 @@ class _OfflineFileAnalyzerPageState extends State<OfflineFileAnalyzerPage> {
 
       streamSub = stream.listen((chunk) {
         Uint8List bytes =
-            (chunk is Uint8List) ? chunk : Uint8List.fromList(chunk);
+        (chunk is Uint8List) ? chunk : Uint8List.fromList(chunk);
         if (bytes.isEmpty) return;
 
         // Ensure even # of bytes for 16-bit samples
@@ -304,7 +301,7 @@ class _OfflineFileAnalyzerPageState extends State<OfflineFileAnalyzerPage> {
 
       // 5) Log
       final analysisMs =
-          DateTime.now().difference(_start).inMilliseconds.toDouble();
+      DateTime.now().difference(_start).inMilliseconds.toDouble();
       final entry = TestLogEntry(
         timestamp: DateTime.now(),
         testType: TestType.mediumTerm,
@@ -344,7 +341,7 @@ class _OfflineFileAnalyzerPageState extends State<OfflineFileAnalyzerPage> {
     } on TimeoutException catch (e) {
       if (mounted) {
         setState(
-            () => _error = 'Timeout: ${e.message ?? "FFmpeg took too long"}');
+                () => _error = 'Timeout: ${e.message ?? "FFmpeg took too long"}');
       }
     } catch (e) {
       if (mounted) {
@@ -494,7 +491,7 @@ class _OfflineFileAnalyzerPageState extends State<OfflineFileAnalyzerPage> {
   @override
   Widget build(BuildContext context) {
     final fileLabel =
-        _pickedPath == null ? 'No file selected' : p.basename(_pickedPath!);
+    _pickedPath == null ? 'No file selected' : p.basename(_pickedPath!);
 
     return Scaffold(
       appBar: AppBar(
@@ -573,20 +570,20 @@ class _OfflineFileAnalyzerPageState extends State<OfflineFileAnalyzerPage> {
                             items: Genre.values
                                 .map(
                                   (g) => DropdownMenuItem(
-                                    value: g,
-                                    child: Text(g.name),
-                                  ),
-                                )
+                                value: g,
+                                child: Text(g.name),
+                              ),
+                            )
                                 .toList(),
                             onChanged: _busy
                                 ? null
                                 : (g) {
-                                    if (g == null) return;
-                                    setState(() {
-                                      _genre = g;
-                                      _subgenre = Subgenre.none;
-                                    });
-                                  },
+                              if (g == null) return;
+                              setState(() {
+                                _genre = g;
+                                _subgenre = Subgenre.none;
+                              });
+                            },
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -601,17 +598,17 @@ class _OfflineFileAnalyzerPageState extends State<OfflineFileAnalyzerPage> {
                             items: _subsFor(_genre)
                                 .map(
                                   (s) => DropdownMenuItem(
-                                    value: s,
-                                    child: Text(s.name.replaceAll('_', ' ')),
-                                  ),
-                                )
+                                value: s,
+                                child: Text(s.name.replaceAll('_', ' ')),
+                              ),
+                            )
                                 .toList(),
                             onChanged: _busy
                                 ? null
                                 : (s) {
-                                    if (s == null) return;
-                                    setState(() => _subgenre = s);
-                                  },
+                              if (s == null) return;
+                              setState(() => _subgenre = s);
+                            },
                           ),
                         ),
                       ],
@@ -621,7 +618,7 @@ class _OfflineFileAnalyzerPageState extends State<OfflineFileAnalyzerPage> {
                       title: const Text('Use Hint BPM'),
                       value: _useHint,
                       onChanged:
-                          _busy ? null : (v) => setState(() => _useHint = v),
+                      _busy ? null : (v) => setState(() => _useHint = v),
                       subtitle: const Text('Constrain search range'),
                       contentPadding: EdgeInsets.zero,
                     ),
@@ -632,7 +629,7 @@ class _OfflineFileAnalyzerPageState extends State<OfflineFileAnalyzerPage> {
                             child: TextField(
                               controller: _hintCtrl,
                               keyboardType:
-                                  const TextInputType.numberWithOptions(
+                              const TextInputType.numberWithOptions(
                                 decimal: true,
                               ),
                               decoration: const InputDecoration(
@@ -648,10 +645,10 @@ class _OfflineFileAnalyzerPageState extends State<OfflineFileAnalyzerPage> {
                             onPressed: _busy
                                 ? null
                                 : () => setState(
-                                      () => _buildAnalyzers(
-                                        sampleRate: _sampleRate,
-                                      ),
-                                    ),
+                                  () => _buildAnalyzers(
+                                sampleRate: _sampleRate,
+                              ),
+                            ),
                             child: const Text('Apply'),
                           ),
                         ],
@@ -660,14 +657,14 @@ class _OfflineFileAnalyzerPageState extends State<OfflineFileAnalyzerPage> {
                       title: const Text('Tighten after lock'),
                       value: _useTight,
                       onChanged:
-                          _busy ? null : (v) => setState(() => _useTight = v),
+                      _busy ? null : (v) => setState(() => _useTight = v),
                       subtitle: const Text('Narrow range when stable'),
                       contentPadding: EdgeInsets.zero,
                     ),
                     const SizedBox(height: 12),
                     FilledButton.icon(
                       onPressed:
-                          (_pickedPath != null && !_busy) ? _analyze : null,
+                      (_pickedPath != null && !_busy) ? _analyze : null,
                       icon: const Icon(Icons.play_arrow),
                       label: const Text('Analyze Track'),
                     ),

@@ -1,6 +1,6 @@
-// lib/widgets/bpm_debug_readout.dart
+// lib/bpm_debug_readout.dart
 import 'package:flutter/material.dart';
-import '../bpm_estimator.dart';
+import 'bpm_estimator.dart'; // ✅ FIXED: Removed '../'
 
 class BpmDebugReadout extends StatelessWidget {
   final BpmEstimator estimator;
